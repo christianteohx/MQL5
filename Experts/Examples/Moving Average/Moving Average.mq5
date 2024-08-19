@@ -18,8 +18,6 @@ input double stopLossAmount      = 15;    // Stop Loss point
 bool openResult = false;
 bool closeResult = false;
 
-
-
 //---
 int    ExtHandle=0;
 bool   ExtHedging=false;
