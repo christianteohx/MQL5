@@ -128,18 +128,18 @@ void CheckForOpen(void)
    if (rt[0].open > ma[0] && rt[0].close < ma[0]) {
         signal = ORDER_TYPE_SELL;    // sell conditions
         stopLossPrice = SymbolInfoDouble(_Symbol, SYMBOL_BID) + (stopLossPoints * tickSize);
-    } else {
-        if (rt[0].open < ma[0] && rt[0].close > ma[0]) {
+   } else {
+      if (rt[0].open < ma[0] && rt[0].close > ma[0]) {
             signal = ORDER_TYPE_BUY;  // buy conditions
             stopLossPrice = SymbolInfoDouble(_Symbol, SYMBOL_ASK) - (stopLossPoints * tickSize);
-        }
-    }
+      }
+   }
     //--- additional checking
-    if (signal != WRONG_VALUE) {
-        if (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol, _Period) > 100){
-           openResult = false;
-           
-           while (openResult == false){
+   if (signal != WRONG_VALUE) {
+         if (TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol, _Period) > 100){
+
+            openResult = false;
+         while (openResult == false){
            
                ExtTrade.PositionOpen(_Symbol, signal, lotSize,
                                      SymbolInfoDouble(_Symbol, signal == ORDER_TYPE_SELL ? SYMBOL_BID : SYMBOL_ASK),
@@ -185,15 +185,14 @@ void CheckForClose(void)
 //--- additional checking
    if(signal)
      {
-      if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol,_Period)>100) {
+   if(TerminalInfoInteger(TERMINAL_TRADE_ALLOWED) && Bars(_Symbol,_Period)>100) {
          closeResult = false;
-           
-           while (closeResult == false){
-              ExtTrade.PositionClose(_Symbol,3);                 
-              closeResult = (ExtTrade.ResultRetcode() != 10018);
-              printf(ExtTrade.ResultRetcode());
-              //break;
-           }
+
+         while (closeResult == false){
+            ExtTrade.PositionClose(_Symbol,3);                 
+            closeResult = (ExtTrade.ResultRetcode() != 10018);
+            printf(ExtTrade.ResultRetcode());
+         }
       }
      }
 //---
