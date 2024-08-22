@@ -20,24 +20,24 @@
 //| Inputs                                                           |
 //+------------------------------------------------------------------+
 //--- inputs for expert
-input string             Expert_Title                      ="a";         // Document name
+input string             Expert_Title                      ="EMA";       // Document name
 ulong                    Expert_MagicNumber                =12282;       //
 bool                     Expert_EveryTick                  =false;       //
 //--- inputs for main signal
 input int                Signal_ThresholdOpen              =10;          // Signal threshold value to open [0...100]
 input int                Signal_ThresholdClose             =10;          // Signal threshold value to close [0...100]
 input double             Signal_PriceLevel                 =0.0;         // Price level to execute a deal
-input double             Signal_StopLevel                  =50.0;        // Stop Loss level (in points)
-input double             Signal_TakeLevel                  =50.0;        // Take Profit level (in points)
+input double             Signal_StopLevel                  =500.0;        // Stop Loss level (in points)
+input double             Signal_TakeLevel                  =500.0;        // Take Profit level (in points)
 input int                Signal_Expiration                 =4;           // Expiration of pending orders (in bars)
-input int                Signal_MA_PeriodMA                =12;          // Moving Average(12,0,...) Period of averaging
-input int                Signal_MA_Shift                   =0;           // Moving Average(12,0,...) Time shift
-input ENUM_MA_METHOD     Signal_MA_Method                  =MODE_EMA;    // Moving Average(12,0,...) Method of averaging
-input ENUM_APPLIED_PRICE Signal_MA_Applied                 =PRICE_CLOSE; // Moving Average(12,0,...) Prices series
-input double             Signal_MA_Weight                  =1.0;         // Moving Average(12,0,...) Weight [0...1.0]
+input int                Signal_MA_PeriodMA                =12;          // Period of averaging
+input int                Signal_MA_Shift                   =0;           // Time shift
+input ENUM_MA_METHOD     Signal_MA_Method                  =MODE_EMA;    // Method of averaging
+input ENUM_APPLIED_PRICE Signal_MA_Applied                 =PRICE_CLOSE; // Prices series
+input double             Signal_MA_Weight                  =1.0;         // Weight [0...1.0]
 //--- inputs for trailing
-input int                Trailing_FixedPips_StopLevel      =30;          // Stop Loss trailing level (in points)
-input int                Trailing_FixedPips_ProfitLevel    =50;          // Take Profit trailing level (in points)
+input int                Trailing_FixedPips_StopLevel      =5000;          // Stop Loss trailing level (in points)
+input int                Trailing_FixedPips_ProfitLevel    =5000;          // Take Profit trailing level (in points)
 //--- inputs for money
 input double             Money_SizeOptimized_DecreaseFactor=3.0;         // Decrease factor
 input double             Money_SizeOptimized_Percent       =10.0;        // Percent
@@ -68,16 +68,17 @@ int OnInit()
       return(INIT_FAILED);
      }
 //---
-   ExtExpert.InitSignal(signal);
-   signal.ThresholdOpen(Signal_ThresholdOpen);
-   signal.ThresholdClose(Signal_ThresholdClose);
-   signal.PriceLevel(Signal_PriceLevel);
-   signal.StopLevel(Signal_StopLevel);
-   signal.TakeLevel(Signal_TakeLevel);
-   signal.Expiration(Signal_Expiration);
-//--- Creating filter CSignalMA
-   CSignalMA *filter0=new CSignalMA;
-   if(filter0==NULL)
+    ExtExpert.InitSignal(signal);
+     signal.ThresholdOpen(Signal_ThresholdOpen);
+     signal.ThresholdClose(Signal_ThresholdClose);
+     signal.PriceLevel(Signal_PriceLevel);
+     signal.StopLevel(Signal_StopLevel);
+     if (Signal_TakeLevel > 0)
+         signal.TakeLevel(Signal_TakeLevel);
+     signal.Expiration(Signal_Expiration);
+     //--- Creating filter CSignalMA
+     CSignalMA *filter0 = new CSignalMA;
+     if (filter0 == NULL)
      {
       //--- failed
       printf(__FUNCTION__+": error creating filter0");
