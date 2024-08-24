@@ -47,7 +47,7 @@ int OnInit() {
     return -1;
   }
 
-  CopyRates(_Symbol, _Period, 0, 4, candle);
+  CopyRates(_Symbol, _Period, 0, 2, candle);
   ArraySetAsSeries(candle, true);
 
   ChartIndicatorAdd(0, 0, fast_ema_handle);
@@ -66,11 +66,11 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
-  CopyBuffer(fast_ema_handle, 0, 0, 4, fast_ema_buffer);
-  CopyBuffer(slow_ema_handle, 0, 0, 4, slow_ema_buffer);
+  CopyBuffer(fast_ema_handle, 0, 0, 2, fast_ema_buffer);
+  CopyBuffer(slow_ema_handle, 0, 0, 2, slow_ema_buffer);
 
   // Feed candle buffers with data
-  CopyRates(_Symbol, _Period, 0, 4, candle);
+  CopyRates(_Symbol, _Period, 0, 2, candle);
   ArraySetAsSeries(candle, true);
 
   // Sort the data vector
@@ -93,16 +93,17 @@ void OnTick() {
   if (newBar) {
     if (Buy && PositionSelect(_Symbol) == false) {
       closeAllTrade();
-      drawVerticalLine("Buy", candle[1].time, clrGreen);
+      // drawVerticalLine("Buy", candle[1].time, clrGreen);
       BuyAtMarket();
     }
 
     if (Sell && PositionSelect(_Symbol) == false) {
       closeAllTrade();
-      drawVerticalLine("Sell", candle[1].time, clrRed);
+      // drawVerticalLine("Sell", candle[1].time, clrRed);
       SellAtMarket();
     }
   }
+
 }
 
 //+------------------------------------------------------------------+
