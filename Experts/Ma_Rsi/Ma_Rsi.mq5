@@ -41,7 +41,6 @@ sinput string s2;               //-----------------RSI-----------------
 input int rsi_period = 14;      // RSI period
 input int rsi_overbought = 70;  // RSI overbought level
 input int rsi_oversold = 30;    // RSI oversold level
-input int rsi_sensitivity = 3;  // RSI sensitivity (How many bars to look back)
 
 sinput string s3;                  //-----------------Risk Management-----------------
 input double SL = 10;              // Stop Loss
@@ -161,14 +160,13 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
-    int buf_count = MathMax(rsi_sensitivity, 4);
-    CopyBuffer(first_ema_handle, 0, 0, buf_count, first_ema_buffer);
-    CopyBuffer(second_ema_handle, 0, 0, buf_count, second_ema_buffer);
-    CopyBuffer(third_ema_handle, 0, 0, buf_count, third_ema_buffer);
-    CopyBuffer(rsi_handle, 0, 0, buf_count, rsi_buffer);
+    CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer);
+    CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer);
+    CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer);
+    CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer);
 
     // Feed candle buffers with data
-    CopyRates(_Symbol, _Period, 0, buf_count, candle);
+    CopyRates(_Symbol, _Period, 0, 4, candle);
     ArraySetAsSeries(candle, true);
 
     // Sort the data vector
@@ -182,33 +180,19 @@ void OnTick() {
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
     bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
     bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
-    bool buy_rsi = false;
+    bool buy_rsi = true;
 
     bool sell_single_ma = candle[1].open > first_ema_buffer[1] && candle[1].close < first_ema_buffer[1];
     bool sell_ma_cross = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
-    bool sell_rsi = false;
+    bool sell_rsi = true;
 
-    if (rsi_strategy != NO_RSI) {
-        for (int i = 0; i < rsi_sensitivity - 1; i++) {
-            if (rsi_strategy == COMPARISON) {
-                if (rsi_buffer[i] > rsi_buffer[i + 1]) {
-                    buy_rsi = true;
-                    break;
-                } else if (rsi_buffer[i] < rsi_buffer[i + 1]) {
-                    sell_rsi = true;
-                    break;
-                }
-            } else if (rsi_strategy == LIMIT) {
-                if (rsi_buffer[i] > rsi_overbought) {
-                    sell_rsi = true;
-                    break;
-                } else if (rsi_buffer[i] < rsi_oversold) {
-                    buy_rsi = true;
-                    break;
-                }
-            }
-        }
+    if (rsi_strategy == COMPARISON) {
+        buy_rsi = rsi_buffer[0] > rsi_buffer[1];
+        sell_rsi = rsi_buffer[0] < rsi_buffer[1];
+    } else if (rsi_strategy == LIMIT) {
+        buy_rsi = rsi_buffer[0] < rsi_overbought;
+        sell_rsi = rsi_buffer[0] > rsi_oversold;
     }
 
     bool Buy = false;
@@ -261,6 +245,10 @@ void OnTick() {
 
     if (trailing_stop) {
         updateStopLoss();
+    }
+
+    if (AccountInfoDouble(ACCOUNT_BALANCE) < 0) {
+        ExpertRemove();
     }
 }
 
