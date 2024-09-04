@@ -247,7 +247,7 @@ void OnTick() {
         updateStopLoss();
     }
 
-    if (AccountInfoDouble(ACCOUNT_BALANCE) < 0) {
+    if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
         ExpertRemove();
     }
 }
