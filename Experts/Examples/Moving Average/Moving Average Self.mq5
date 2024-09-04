@@ -7,15 +7,16 @@
 #property link      "https://www.mql5.com"
 #property version   "1.00"
 
-#include <Trade\Trade.mqh>
-#include <Arrays\ArrayObj.mqh>
-#include <Arrays\ArrayLong.mqh>
+#include <Trade/Trade.mqh>
+#include <Arrays/ArrayObj.mqh>
+#include <Arrays/ArrayLong.mqh>
 
 input double MaximumRisk        = 0.02;    // Maximum Risk in percentage
 input double DecreaseFactor     = 3;       // Descrease factor
 input int    MovingPeriod       = 12;      // Moving Average period
 input int    MovingShift        = 6;       // Moving Average shift
 input double stopLossAmount      = 15;    // Stop Loss point
+input double takeProfitAmount    = 30;    // Take Profit point
 
 CArrayObj *openBacklog = new CArrayObj;
 CArrayLong    *closeBacklog=new CArrayLong;
@@ -69,6 +70,10 @@ double TradeSizeOptimized(void) {
    if(margin<=0.0)
       return(0.0);
 
+   Print("Account Margin Free: " + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE)));
+   Print("Maximum Risk: " + DoubleToString(MaximumRisk));
+   Print("Margin: " + DoubleToString(margin));
+
    double lot=NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE)*MaximumRisk/margin,2);
 
 //--- calculate number of losses orders without a break1
@@ -120,6 +125,14 @@ double TradeSizeOptimized(void) {
 
    double minvol=SymbolInfoDouble(_Symbol,SYMBOL_VOLUME_MIN);
 
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+
+   if (balance < 1000) {
+      minvol = 0.01;
+   } else {
+      minvol = (balance / 100000);
+   }
+
    if(lot<minvol)
       lot=minvol;
 
@@ -132,17 +145,6 @@ double TradeSizeOptimized(void) {
    return(lot);
 }
 
-//+------------------------------------------------------------------+
-//| Calculate stop loss position                               |
-//+------------------------------------------------------------------+
-double CalculateStopLossPoints(double lotSize) {
-
-    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-    double stopLossPoints = (stopLossAmount / lotSize) / tickValue;
-
-    return NormalizeDouble(stopLossPoints, _Digits);
-}
 //+------------------------------------------------------------------+
 //| Check for open position conditions                               |
 //+------------------------------------------------------------------+
@@ -172,7 +174,6 @@ bool CheckForOpen(void){
    ENUM_ORDER_TYPE signal = WRONG_VALUE;
    double stopLossPrice = 0;
    double lotSize = TradeSizeOptimized();
-   double stopLossPoints = CalculateStopLossPoints(lotSize);
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE); // Use tickSize in the calculation
 
    bool order = false;
@@ -189,7 +190,8 @@ bool CheckForOpen(void){
       request.action=TRADE_ACTION_DEAL;
       request.type_filling=ORDER_FILLING_FOK;
       request.price=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-      request.sl=SymbolInfoDouble(_Symbol, SYMBOL_BID) + (stopLossPoints * tickSize);
+      request.sl=SymbolInfoDouble(_Symbol, SYMBOL_BID) + (stopLossAmount / tickSize);
+      request.tp=SymbolInfoDouble(_Symbol, SYMBOL_BID) - (takeProfitAmount / tickSize);
       request.comment = "Cross down, Short";
 
       order = true;
@@ -205,7 +207,8 @@ bool CheckForOpen(void){
          request.action=TRADE_ACTION_DEAL;
          request.type_filling=ORDER_FILLING_FOK;
          request.price=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-         request.sl=SymbolInfoDouble(_Symbol, SYMBOL_ASK) - (stopLossPoints * tickSize);
+         request.sl=SymbolInfoDouble(_Symbol, SYMBOL_ASK) - (stopLossAmount / tickSize);
+         request.tp=SymbolInfoDouble(_Symbol, SYMBOL_ASK) + (takeProfitAmount / tickSize);
          request.comment = "Cross up, Long";
 
          order = true;
@@ -438,7 +441,6 @@ void clearBacklog() {
 
       double stopLossPrice = 0;
       double lotSize = TradeSizeOptimized();
-      double stopLossPoints = CalculateStopLossPoints(lotSize);
       double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
 
       CTradeRequestWrapper *tradeRequestWrapper = new CTradeRequestWrapper();
@@ -449,11 +451,13 @@ void clearBacklog() {
 
          if (tradeRequestWrapper.request.type == ORDER_TYPE_BUY) {
             tradeRequestWrapper.request.price=SymbolInfoDouble(_Symbol,SYMBOL_ASK);
-            tradeRequestWrapper.request.sl=SymbolInfoDouble(_Symbol, SYMBOL_ASK) - (stopLossPoints * tickSize);
+            tradeRequestWrapper.request.sl=SymbolInfoDouble(_Symbol, SYMBOL_ASK) - (stopLossAmount / tickSize);
+            tradeRequestWrapper.request.tp=SymbolInfoDouble(_Symbol, SYMBOL_ASK) + (takeProfitAmount / tickSize);
             tradeRequestWrapper.request.comment = "Cross up, Long (Backlog)";
          } else if (tradeRequestWrapper.request.type == ORDER_TYPE_SELL) {
             tradeRequestWrapper.request.price=SymbolInfoDouble(_Symbol,SYMBOL_BID);
-            tradeRequestWrapper.request.sl=SymbolInfoDouble(_Symbol, SYMBOL_BID) + (stopLossPoints * tickSize);
+            tradeRequestWrapper.request.sl=SymbolInfoDouble(_Symbol, SYMBOL_BID) + (stopLossAmount / tickSize);
+            tradeRequestWrapper.request.tp=SymbolInfoDouble(_Symbol, SYMBOL_BID) - (takeProfitAmount / tickSize);
             tradeRequestWrapper.request.comment = "Cross down, Short (Backlog)";
          }
 
