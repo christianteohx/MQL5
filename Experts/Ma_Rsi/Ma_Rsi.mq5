@@ -209,6 +209,12 @@ void OnTick() {
     } else if (ma_strategy == TRIPLE_MA) {
         Buy = (buy_ma_cross && buy_triple_ma);
         Sell = (sell_ma_cross && sell_triple_ma);
+
+        if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
+            Buy = true;
+        } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
+            Sell = true;
+        }
     }
 
     if (rsi_strategy != NO_RSI) {
