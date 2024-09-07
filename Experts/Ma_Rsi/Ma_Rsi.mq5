@@ -3,8 +3,12 @@
 //|                                  Copyright 2024, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-#include <Expert/Trailing/TrailingFixedPips.mqh>
+#include <Math/Stat/Stat.mqh>
 #include <Trade/AccountInfo.mqh>
+#include <Trade/Trade.mqh>
+#include <MQL5Book/DealFilter.mqh>
+
+#define USE_R2_CRITERION
 //+------------------------------------------------------------------+
 //| Input variables                                                  |
 //+------------------------------------------------------------------+
@@ -45,7 +49,7 @@ input int rsi_oversold = 30;    // RSI oversold level
 sinput string s3;                  //-----------------Risk Management-----------------
 input double SL = 10;              // Stop Loss
 input double TP = 10;              // Take Profit
-input bool trailing_stop = false;  // Trailing Stop
+input bool trailing_sl = true;     // Trailing Stop Loss
 input int max_risk = 10;           // Maximum risk (%) per trade
 input double decrease_factor = 3;  // Descrease factor
 input bool boost = false;          // Use high risk until target reached
@@ -74,20 +78,7 @@ int magic_number = 50357114;  // Magic number
 MqlRates candle[];  // Variable for storing candles
 MqlTick tick;       // Variable for storing ticks
 
-class CTradeRequestWrapper : public CObject {
-   public:
-    MqlTradeRequest request;  // MqlTradeRequest structure
-
-    // Constructor
-    CTradeRequestWrapper() {
-        ZeroMemory(request);  // Initialize the request to zero
-    }
-
-    // Copy constructor (optional)
-    CTradeRequestWrapper(const CTradeRequestWrapper &src) {
-        this.request = src.request;
-    }
-};
+CTrade ExtTrade;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -116,6 +107,10 @@ int OnInit() {
             return -1;
         }
     }
+
+    ExtTrade.SetExpertMagicNumber(magic_number);
+    ExtTrade.SetDeviationInPoints(10);
+    ExtTrade.SetTypeFilling(ORDER_FILLING_FOK);
 
     first_ema_handle = iCustom(_Symbol, Period(), "Examples/Custom Moving Average", first_ema_period, 0, MODE_EMA, clrRed, PRICE_CLOSE);
     second_ema_handle = iCustom(_Symbol, Period(), "Examples/Custom Moving Average", second_ema_period, 0, MODE_EMA, clrBlue, PRICE_CLOSE);
@@ -160,6 +155,10 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
+    if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) {
+        Print("Trading is not allowed on this terminal.");
+        return;
+    }
     CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer);
     CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer);
     CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer);
@@ -225,8 +224,6 @@ void OnTick() {
     bool newBar = isNewBar();
 
     if (newBar) {
-        // clearBacklog();
-
         if (Buy && PositionSelect(_Symbol) == false) {
             closeAllTrade();
             // drawVerticalLine("Buy", candle[1].time, clrGreen);
@@ -249,8 +246,8 @@ void OnTick() {
     ArrayFree(third_ema_buffer);
     ArrayFree(rsi_buffer);
 
-    if (trailing_stop) {
-        updateStopLoss();
+    if (trailing_sl) {
+        updateSLTP();
     }
 
     if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
@@ -292,118 +289,54 @@ void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue) {
 //| FUNCTIONS FOR SENDING ORDERS                                     |
 //+------------------------------------------------------------------+
 void BuyAtMarket() {
-    MqlTradeRequest request;
-    MqlTradeResult response;
+    double sl = 0;
+    double tp = 0;
 
-    request.action = TRADE_ACTION_DEAL;
-    request.magic = magic_number;
-    request.symbol = _Symbol;
-    request.volume = getVolume();
-    request.price = NormalizeDouble(tick.ask, _Digits);
     if (SL > 0)
-        request.sl = NormalizeDouble(tick.ask - (SL / _Point), _Digits);
-    if (TP > 0 || trailing_stop == false)
-        request.tp = NormalizeDouble(tick.ask + (TP / _Point), _Digits);
-    request.deviation = 0;
-    request.type = ORDER_TYPE_BUY;
-    request.type_filling = ORDER_FILLING_FOK;
+        sl = NormalizeDouble(tick.ask - (SL / _Point), _Digits);
+    if (TP > 0)
+        tp = NormalizeDouble(tick.ask + (TP / _Point), _Digits);
 
-    OrderSend(request, response);
-
-    if (response.retcode == 10008 || response.retcode == 10009) {
-        Print(("Order Buy Executed successfully!"));
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp)) {
+        Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
+              ". Code description: ", ExtTrade.ResultRetcodeDescription());
     } else {
-        Print("Error sending Order to Buy. Error = ", GetLastError());
-        Print("Price: ", request.price, " SL: ", request.sl, " TP: ", request.tp);
-        ResetLastError();
+        // Print("Order Buy Executed successfully!");
     }
-
-    ZeroMemory(request);
-    ZeroMemory(response);
 }
 
 void SellAtMarket() {
-    MqlTradeRequest request;
-    MqlTradeResult response;
+    double sl = 0;
+    double tp = 0;
 
-    request.action = TRADE_ACTION_DEAL;
-    request.magic = magic_number;
-    request.symbol = _Symbol;
-    request.volume = getVolume();
-    request.price = NormalizeDouble(tick.bid, _Digits);
     if (SL > 0)
-        request.sl = NormalizeDouble(tick.ask + (SL / _Point), _Digits);
-    if (TP > 0 || trailing_stop == false)
-        request.tp = NormalizeDouble(tick.ask - (TP / _Point), _Digits);
-    request.deviation = 0;
-    request.type = ORDER_TYPE_SELL;
-    request.type_filling = ORDER_FILLING_FOK;
+        sl = NormalizeDouble(tick.bid + (SL / _Point), _Digits);
+    if (TP > 0)
+        tp = NormalizeDouble(tick.bid - (TP / _Point), _Digits);
 
-    OrderSend(request, response);
-
-    if (response.retcode == 10008 || response.retcode == 10009) {
-        Print(("Order Sell Executed successfully!"));
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.bid, sl, tp)) {
+        Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
+              ". Code description: ", ExtTrade.ResultRetcodeDescription());
     } else {
-        Print("Error sending Order to Sell. Error = ", GetLastError());
-        Print("Price: ", request.price, " SL: ", request.sl, " TP: ", request.tp);
-        ResetLastError();
+        // Print(("Order Sell Executed successfully!"));
     }
-
-    ZeroMemory(request);
-    ZeroMemory(response);
 }
 
-void CloseBuy(double lot_size = 0.01) {
-    MqlTradeRequest request;
-    MqlTradeResult response;
+void closeAllTrade() {
+    int total = PositionsTotal();
+    for (int i = 0; i < total; i++) {
+        ulong ticket = PositionGetTicket(i);
 
-    request.action = TRADE_ACTION_DEAL;
-    request.magic = magic_number;
-    request.symbol = _Symbol;
-    request.volume = lot_size;
-    request.price = NormalizeDouble(tick.bid, _Digits);
-    request.type = ORDER_TYPE_SELL;
-    request.type_filling = ORDER_FILLING_FOK;
-
-    OrderSend(request, response);
-
-    if (response.retcode == 10008 || response.retcode == 10009) {
-        Print(("Order Close Buy Executed successfully!"));
-    } else {
-        Print("Error sending Order to Close Buy. Error = ", GetLastError());
-        ResetLastError();
+        if (!ExtTrade.PositionClose(ticket)) {
+            Print("Close trade failed. Return code=", ExtTrade.ResultRetcode(),
+                  ". Code description: ", ExtTrade.ResultRetcodeDescription());
+        } else {
+            // Print("Close position successfully!");
+        }
     }
-
-    ZeroMemory(request);
-    ZeroMemory(response);
 }
 
-void CloseSell(double lot_size = 0.01) {
-    MqlTradeRequest request;
-    MqlTradeResult response;
-
-    request.action = TRADE_ACTION_DEAL;
-    request.magic = magic_number;
-    request.symbol = _Symbol;
-    request.volume = lot_size;
-    request.price = NormalizeDouble(tick.ask, _Digits);
-    request.type = ORDER_TYPE_BUY;
-    request.type_filling = ORDER_FILLING_FOK;
-
-    OrderSend(request, response);
-
-    if (response.retcode == 10008 || response.retcode == 10009) {
-        Print(("Order Close Sell Executed successfully!"));
-    } else {
-        Print("Error sending Order to Close Sell. Error = ", GetLastError());
-        ResetLastError();
-    }
-
-    ZeroMemory(request);
-    ZeroMemory(response);
-}
-
-void updateStopLoss() {
+void updateSLTP() {
     MqlTradeRequest request;
     MqlTradeResult response;
 
@@ -422,70 +355,30 @@ void updateStopLoss() {
             double take_profit = PositionGetDouble(POSITION_TP);
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                if (stop_loss < tick.bid - (SL / _Point)) {
-                    request.action = TRADE_ACTION_SLTP;
-                    request.magic = magic_number;
-                    request.symbol = position_symbol;
-                    request.sl = NormalizeDouble(tick.bid - (SL / _Point), digits);
-                    request.type = ORDER_TYPE_BUY;
-                    request.type_filling = ORDER_FILLING_RETURN;
-                    request.position = position_ticket;
-
-                    OrderSend(request, response);
-
-                    if (response.retcode == 10008 || response.retcode == 10009) {
-                        // Print(("Order Update Stop Loss Buy Executed successfully!"));
-                    } else {
-                        Print("Error sending Order to Update Stop Loss Buy. Error = ", GetLastError());
-                        ResetLastError();
-                    }
-
-                    ZeroMemory(request);
-                    ZeroMemory(response);
+                if (trailing_sl && stop_loss < tick.bid - (SL / _Point)) {
+                    stop_loss = NormalizeDouble(tick.bid - (SL / _Point), digits);
                 }
-            } else {
-                if (stop_loss > tick.ask + (SL / _Point)) {
-                    request.action = TRADE_ACTION_SLTP;
-                    request.magic = magic_number;
-                    request.symbol = position_symbol;
-                    request.sl = NormalizeDouble(tick.ask + (SL / _Point), digits);
-                    request.type = ORDER_TYPE_SELL;
-                    request.type_filling = ORDER_FILLING_RETURN;
-                    request.position = position_ticket;
 
-                    OrderSend(request, response);
-
-                    if (response.retcode == 10008 || response.retcode == 10009) {
-                        // Print(("Order Update Stop Loss Sell Executed successfully!"));
-                    } else {
-                        Print("Error sending Order to Update Stop Loss Sell. Error = ", GetLastError());
-                        ResetLastError();
-
-                        if (response.retcode == TRADE_RETCODE_MARKET_CLOSED) {
-                            return;
-                        }
-                    }
-
-                    ZeroMemory(request);
-                    ZeroMemory(response);
+                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
+                    //--- failure message
+                    Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
+                          ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                } else {
+                    // Print(("Order Update Stop Loss Buy Executed successfully!"));
                 }
-            }
-        }
-    }
-}
 
-void closeAllTrade() {
-    int total = PositionsTotal();
-    for (int i = 0; i < total; i++) {
-        ulong ticket = PositionGetTicket(i);
-        if (PositionSelectByTicket(ticket)) {
-            double lot_size = PositionGetDouble(POSITION_VOLUME);
-
-            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                //  get the volume of the position
-                CloseBuy(lot_size);
             } else {
-                CloseSell(lot_size);
+                if (trailing_sl && stop_loss > tick.ask + (SL / _Point)) {
+                    stop_loss = NormalizeDouble(tick.ask + (SL / _Point), digits);
+                }
+
+                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
+                    //--- failure message
+                    Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
+                          ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                } else {
+                    // Print(("Order Update Stop Loss Sell Executed successfully!"));
+                }
             }
         }
     }
@@ -672,4 +565,86 @@ double exponentialVol(void) {
     }
 
     return NormalizeDouble(volume, 2);
+}
+
+double OnTester() {
+    #ifdef USE_R2_CRITERION
+        return GetR2onBalanceCurve();
+    #else const double profit = TesterStatistics(STAT_PROFIT);
+        return sign(profit) * sqrt(fabs(profit)) * sqrt(TesterStatistics(STAT_PROFIT_FACTOR)) * sqrt(TesterStatistics(STAT_TRADES)) * sqrt(fabs(TesterStatistics(STAT_SHARPE_RATIO)));
+    #endif
+}
+
+double sign (const double x) {
+    return x > 0 ? +1 : (x < 0 ? -1 : 0);
+}
+
+struct R2A {
+    double r2;
+    double angle;
+    R2A() : r2(0), angle(0) {}
+};
+
+R2A RSquared(const double& data[]) {
+    int size = ArraySize(data);
+    if (size <= 2) return R2A();
+    double x, y, div;
+    int k = 0;
+    double Sx = 0, Sy = 0, Sxy = 0, Sx2 = 0, Sy2 = 0;
+    for (int i = 0; i < size; ++i) {
+        if (data[i] == EMPTY_VALUE || !MathIsValidNumber(data[i])) continue;
+        x = i + 1;
+        y = data[i];
+        Sx += x;
+        Sy += y;
+        Sxy += x * y;
+        Sx2 += x * x;
+        Sy2 += y * y;
+        ++k;
+    }
+    size = k;
+    const double Sx22 = Sx * Sx / size;
+    const double Sy22 = Sy * Sy / size;
+    const double SxSy = Sx * Sy / size;
+    div = (Sx2 - Sx22) * (Sy2 - Sy22);
+    if (fabs(div) < DBL_EPSILON) return R2A();
+    R2A result;
+    result.r2 = (Sxy - SxSy) * (Sxy - SxSy) / div;
+    result.angle = (Sxy - SxSy) / (Sx2 - Sx22);
+    return result;
+}
+
+double RSquaredTest(const double& data[]) {
+    const R2A result = RSquared(data);
+    const double weight = 1.0 - 1.0 / sqrt(ArraySize(data) + 1);
+    if (result.angle < 0) return -fabs(result.r2) * weight;
+    return result.r2 * weight;
+}
+
+#define STAT_PROPS 4
+
+double GetR2onBalanceCurve() {
+    HistorySelect(0, LONG_MAX);
+    const ENUM_DEAL_PROPERTY_DOUBLE props[STAT_PROPS] = {
+        DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_FEE};
+    double expenses[][STAT_PROPS];
+    ulong tickets[];  // only needed because of the 'select' prototype, but useful for debugging
+    DealFilter filter;
+    filter.let(DEAL_TYPE, (1 << DEAL_TYPE_BUY) | (1 << DEAL_TYPE_SELL), IS::OR_BITWISE)
+        .let(DEAL_ENTRY,
+             (1 << DEAL_ENTRY_OUT) | (1 << DEAL_ENTRY_INOUT) | (1 << DEAL_ENTRY_OUT_BY), IS::OR_BITWISE)
+        .select(props, tickets, expenses);
+    const int n = ArraySize(tickets);
+    double balance[];
+    ArrayResize(balance, n + 1);
+    balance[0] = TesterStatistics(STAT_INITIAL_DEPOSIT);
+    for (int i = 0; i < n; ++i) {
+        double result = 0;
+        for (int j = 0; j < STAT_PROPS; ++j) {
+            result += expenses[i][j];
+        }
+        balance[i + 1] = result + balance[i];
+    }
+    const double r2 = RSquaredTest(balance);
+    return r2 * 100;
 }
