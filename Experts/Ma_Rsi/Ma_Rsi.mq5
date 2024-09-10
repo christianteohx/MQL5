@@ -3,121 +3,118 @@
 //|                                  Copyright 2024, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-#include <Math/Stat/Stat.mqh>
+#include <MQL5Book/DealFilter.mqh>
+#include <Tests/MaximumFavorableExcursion.mqh>
+#include <Tests/MeanAbsoluteError.mqh>
+#include <Tests/RSquared.mqh>
+#include <Tests/RootMeanSquaredError.mqh>
 #include <Trade/AccountInfo.mqh>
 #include <Trade/Trade.mqh>
-#include <MQL5Book/DealFilter.mqh>
-#include <Tests/RSquared.mqh>
 
 #define USE_R2_CRITERION
 //+------------------------------------------------------------------+
 //| Input variables                                                  |
 //+------------------------------------------------------------------+
-enum MA
-{
+enum MA {
     NO_MA,
     SINGLE_MA,
     DOUBLE_MA,
     TRIPLE_MA,
 };
 
-enum RSI
-{
+enum RSI {
     NO_RSI,
     COMPARISON,
     LIMIT,
 };
 
-enum RISK_MANAGEMENT
-{
+enum RISK_MANAGEMENT {
     OPTIMIZED,
     FIXED_PERCENTAGE,
     EXPONENTIAL,
 };
 
-sinput string s0; //-----------------Strategy-----------------
+enum TEST_CRITERION {
+    MAXIMUM_FAVORABLE_EXCURSION,
+    MEAN_ABSOLUTE_ERROR,
+    ROOT_MEAN_SQUARED_ERROR,
+    R_SQUARED
+};
+
+sinput string s0;  //-----------------Strategy-----------------
 input MA ma_strategy = TRIPLE_MA;
 input RSI rsi_strategy = LIMIT;
 input RISK_MANAGEMENT risk_management = OPTIMIZED;
 
-sinput string s1;                 //-----------------Moving Average-----------------
-input int first_ema_period = 13;  // first EMA period
-input int second_ema_period = 48; // second EMA period
-input int third_ema_period = 200; // third EMA period
+sinput string s1;                  //-----------------Moving Average-----------------
+input int first_ema_period = 13;   // first EMA period
+input int second_ema_period = 48;  // second EMA period
+input int third_ema_period = 200;  // third EMA period
 
-sinput string s2;              //-----------------RSI-----------------
-input int rsi_period = 14;     // RSI period
-input int rsi_overbought = 70; // RSI overbought level
-input int rsi_oversold = 30;   // RSI oversold level
+sinput string s2;               //-----------------RSI-----------------
+input int rsi_period = 14;      // RSI period
+input int rsi_overbought = 70;  // RSI overbought level
+input int rsi_oversold = 30;    // RSI oversold level
 
-sinput string s3;                 //-----------------Risk Management-----------------
-input double SL = 10;             // Stop Loss
-input double TP = 10;             // Take Profit
-input bool trailing_sl = true;    // Trailing Stop Loss
-input int max_risk = 10;          // Maximum risk (%) per trade
-input double decrease_factor = 3; // Descrease factor
-input bool boost = false;         // Use high risk until target reached
-input double boost_target = 5000; // Boost target
+sinput string s3;                  //-----------------Risk Management-----------------
+input double SL = 10;              // Stop Loss
+input double TP = 10;              // Take Profit
+input bool trailing_sl = true;     // Trailing Stop Loss
+input int max_risk = 10;           // Maximum risk (%) per trade
+input double decrease_factor = 3;  // Descrease factor
+input bool boost = false;          // Use high risk until target reached
+input double boost_target = 5000;  // Boost target
+
+input TEST_CRITERION test_criterion = R_SQUARED;  // Test criterion
 
 //+------------------------------------------------------------------+
 //| Variable for indicators                                          |
 //+------------------------------------------------------------------+
-int first_ema_handle;      // Handle First EMA
-double first_ema_buffer[]; // Buffer First EMA
+int first_ema_handle;       // Handle First EMA
+double first_ema_buffer[];  // Buffer First EMA
 
-int second_ema_handle;      // Handle secondium EMA
-double second_ema_buffer[]; // Buffer secondium EMA
+int second_ema_handle;       // Handle secondium EMA
+double second_ema_buffer[];  // Buffer secondium EMA
 
-int third_ema_handle;      // Handle third EMA
-double third_ema_buffer[]; // Buffer third EMA
+int third_ema_handle;       // Handle third EMA
+double third_ema_buffer[];  // Buffer third EMA
 
-int rsi_handle;      // Handle RSI
-double rsi_buffer[]; // Buffer RSI
+int rsi_handle;       // Handle RSI
+double rsi_buffer[];  // Buffer RSI
 
 //+------------------------------------------------------------------+
 //| Variable for functions                                           |
 //+------------------------------------------------------------------+
-int magic_number = 50357114; // Magic number
+int magic_number = 50357114;  // Magic number
 
-MqlRates candle[]; // Variable for storing candles
-MqlTick tick;      // Variable for storing ticks
+MqlRates candle[];  // Variable for storing candles
+MqlTick tick;       // Variable for storing ticks
 
 CTrade ExtTrade;
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
-int OnInit()
-{
-    if (ma_strategy == SINGLE_MA)
-    {
-        if (first_ema_period < 1)
-        {
+int OnInit() {
+    if (ma_strategy == SINGLE_MA) {
+        if (first_ema_period < 1) {
             Alert("Invalid EMA period");
             return -1;
         }
-    }
-    else if (ma_strategy == DOUBLE_MA)
-    {
-        if (first_ema_period > second_ema_period)
-        {
+    } else if (ma_strategy == DOUBLE_MA) {
+        if (first_ema_period > second_ema_period) {
             Alert("Invalid EMA period");
             return -1;
         }
-    }
-    else if (ma_strategy == TRIPLE_MA)
-    {
-        if (first_ema_period > second_ema_period || second_ema_period > third_ema_period)
-        {
+    } else if (ma_strategy == TRIPLE_MA) {
+        if (first_ema_period > second_ema_period || second_ema_period > third_ema_period) {
             Alert("Invalid EMA period");
             return -1;
         }
     }
 
-    if (rsi_strategy != NO_RSI)
-    {
-        if (rsi_overbought < rsi_oversold)
-        {
+    if (rsi_strategy != NO_RSI) {
+        if (rsi_overbought < rsi_oversold) {
             Alert("Invalid RSI levels");
             return -1;
         }
@@ -134,8 +131,7 @@ int OnInit()
     rsi_handle = iRSI(_Symbol, _Period, rsi_period, PRICE_CLOSE);
 
     // Check if the EMA was created successfully
-    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE)
-    {
+    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
 
         return -1;
@@ -159,8 +155,7 @@ int OnInit()
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
+void OnDeinit(const int reason) {
     IndicatorRelease(first_ema_handle);
     IndicatorRelease(second_ema_handle);
     IndicatorRelease(third_ema_handle);
@@ -171,10 +166,9 @@ void OnDeinit(const int reason)
 //+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
-void OnTick()
-{
-    if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED))
-    {
+void OnTick() {
+    Print("Point: ", _Point);
+    if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) {
         Print("Trading is not allowed on this terminal.");
         return;
     }
@@ -205,13 +199,10 @@ void OnTick()
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
     bool sell_rsi = true;
 
-    if (rsi_strategy == COMPARISON)
-    {
+    if (rsi_strategy == COMPARISON) {
         buy_rsi = rsi_buffer[0] > rsi_buffer[1];
         sell_rsi = rsi_buffer[0] < rsi_buffer[1];
-    }
-    else if (rsi_strategy == LIMIT)
-    {
+    } else if (rsi_strategy == LIMIT) {
         buy_rsi = rsi_buffer[0] < rsi_overbought;
         sell_rsi = rsi_buffer[0] > rsi_oversold;
     }
@@ -219,43 +210,32 @@ void OnTick()
     bool Buy = false;
     bool Sell = false;
 
-    if (ma_strategy == SINGLE_MA)
-    {
+    if (ma_strategy == SINGLE_MA) {
         Buy = buy_single_ma;
         Sell = sell_single_ma;
-    }
-    else if (ma_strategy == DOUBLE_MA)
-    {
+    } else if (ma_strategy == DOUBLE_MA) {
         Buy = buy_ma_cross;
         Sell = sell_ma_cross;
-    }
-    else if (ma_strategy == TRIPLE_MA)
-    {
+    } else if (ma_strategy == TRIPLE_MA) {
         Buy = (buy_ma_cross && buy_triple_ma);
         Sell = (sell_ma_cross && sell_triple_ma);
 
-        if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1])
-        {
+        if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
             Buy = true;
-        }
-        else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1])
-        {
+        } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
             Sell = true;
         }
     }
 
-    if (rsi_strategy != NO_RSI)
-    {
+    if (rsi_strategy != NO_RSI) {
         Buy = Buy && buy_rsi;
         Sell = Sell && sell_rsi;
     }
 
     bool newBar = isNewBar();
 
-    if (newBar)
-    {
-        if (Buy && PositionSelect(_Symbol) == false)
-        {
+    if (newBar) {
+        if (Buy && PositionSelect(_Symbol) == false) {
             closeAllTrade();
             // drawVerticalLine("Buy", candle[1].time, clrGreen);
             const string message = "Buy Signal for " + _Symbol;
@@ -263,8 +243,7 @@ void OnTick()
             BuyAtMarket();
         }
 
-        if (Sell && PositionSelect(_Symbol) == false)
-        {
+        if (Sell && PositionSelect(_Symbol) == false) {
             closeAllTrade();
             // drawVerticalLine("Sell", candle[1].time, clrRed);
             const string message = "Sell Signal for " + _Symbol;
@@ -278,13 +257,11 @@ void OnTick()
     ArrayFree(third_ema_buffer);
     ArrayFree(rsi_buffer);
 
-    if (trailing_sl)
-    {
+    if (trailing_sl) {
         updateSLTP();
     }
 
-    if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67))
-    {
+    if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
         ExpertRemove();
     }
 }
@@ -293,19 +270,16 @@ void OnTick()
 //| Useful functions                                                 |
 //+------------------------------------------------------------------+
 //--- for bar change
-bool isNewBar()
-{
+bool isNewBar() {
     static datetime last_time = 0;
     datetime lastbar_time = (datetime)SeriesInfoInteger(Symbol(), Period(), SERIES_LASTBAR_DATE);
 
-    if (last_time == 0)
-    {
+    if (last_time == 0) {
         last_time = lastbar_time;
         return false;
     }
 
-    if (last_time != lastbar_time)
-    {
+    if (last_time != lastbar_time) {
         last_time = lastbar_time;
         return true;
     }
@@ -316,8 +290,7 @@ bool isNewBar()
 //+------------------------------------------------------------------+
 //| FUNCTIONS TO ASSIST IN THE VISUALIZATION OF THE STRATEGY         |
 //+------------------------------------------------------------------+
-void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue)
-{
+void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue) {
     ObjectDelete(0, name);
     ObjectCreate(0, name, OBJ_VLINE, 0, dt, 0);
     ObjectSetInteger(0, name, OBJPROP_COLOR, cor);
@@ -326,8 +299,7 @@ void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue)
 //+------------------------------------------------------------------+
 //| FUNCTIONS FOR SENDING ORDERS                                     |
 //+------------------------------------------------------------------+
-void BuyAtMarket()
-{
+void BuyAtMarket() {
     double sl = 0;
     double tp = 0;
 
@@ -336,19 +308,15 @@ void BuyAtMarket()
     if (TP > 0)
         tp = NormalizeDouble(tick.ask + (TP / _Point), _Digits);
 
-    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp))
-    {
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp)) {
         Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
               ". Code description: ", ExtTrade.ResultRetcodeDescription());
-    }
-    else
-    {
+    } else {
         // Print("Order Buy Executed successfully!");
     }
 }
 
-void SellAtMarket()
-{
+void SellAtMarket() {
     double sl = 0;
     double tp = 0;
 
@@ -357,90 +325,68 @@ void SellAtMarket()
     if (TP > 0)
         tp = NormalizeDouble(tick.bid - (TP / _Point), _Digits);
 
-    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.bid, sl, tp))
-    {
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.bid, sl, tp)) {
         Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
               ". Code description: ", ExtTrade.ResultRetcodeDescription());
-    }
-    else
-    {
+    } else {
         // Print(("Order Sell Executed successfully!"));
     }
 }
 
-void closeAllTrade()
-{
+void closeAllTrade() {
     int total = PositionsTotal();
-    for (int i = 0; i < total; i++)
-    {
+    for (int i = 0; i < total; i++) {
         ulong ticket = PositionGetTicket(i);
 
-        if (!ExtTrade.PositionClose(ticket))
-        {
+        if (!ExtTrade.PositionClose(ticket)) {
             Print("Close trade failed. Return code=", ExtTrade.ResultRetcode(),
                   ". Code description: ", ExtTrade.ResultRetcodeDescription());
-        }
-        else
-        {
+        } else {
             // Print("Close position successfully!");
         }
     }
 }
 
-void updateSLTP()
-{
+void updateSLTP() {
     MqlTradeRequest request;
     MqlTradeResult response;
 
     int total = PositionsTotal();
 
-    for (int i = 0; i < total; i++)
-    {
+    for (int i = 0; i < total; i++) {
         //--- parameters of the order
-        ulong position_ticket = PositionGetTicket(i);                        // ticket of the position
-        string position_symbol = PositionGetString(POSITION_SYMBOL);         // symbol
-        int digits = (int)SymbolInfoInteger(position_symbol, SYMBOL_DIGITS); // number of decimal places
+        ulong position_ticket = PositionGetTicket(i);                         // ticket of the position
+        string position_symbol = PositionGetString(POSITION_SYMBOL);          // symbol
+        int digits = (int)SymbolInfoInteger(position_symbol, SYMBOL_DIGITS);  // number of decimal places
 
-        double profit = PositionGetDouble(POSITION_PROFIT); // open price
+        double profit = PositionGetDouble(POSITION_PROFIT);  // open price
 
-        if (profit > 0.00)
-        {
+        if (profit > 0.00) {
             double stop_loss = PositionGetDouble(POSITION_SL);
             double take_profit = PositionGetDouble(POSITION_TP);
 
-            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY)
-            {
-                if (trailing_sl && stop_loss < tick.bid - (SL / _Point))
-                {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+                if (trailing_sl && stop_loss < tick.bid - (SL / _Point)) {
                     stop_loss = NormalizeDouble(tick.bid - (SL / _Point), digits);
                 }
 
-                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0))
-                {
+                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
                     //--- failure message
                     Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                }
-                else
-                {
+                } else {
                     // Print(("Order Update Stop Loss Buy Executed successfully!"));
                 }
-            }
-            else
-            {
-                if (trailing_sl && stop_loss > tick.ask + (SL / _Point))
-                {
+            } else {
+                if (trailing_sl && stop_loss > tick.ask + (SL / _Point)) {
                     stop_loss = NormalizeDouble(tick.ask + (SL / _Point), digits);
                 }
 
-                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0))
-                {
+                if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
                     //--- failure message
                     Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                }
-                else
-                {
+                } else {
                     // Print(("Order Update Stop Loss Sell Executed successfully!"));
                 }
             }
@@ -448,31 +394,23 @@ void updateSLTP()
     }
 }
 
-double getVolume()
-{
-    if (boost == true && AccountInfoDouble(ACCOUNT_BALANCE) < boost_target)
-    {
+double getVolume() {
+    if (boost == true && AccountInfoDouble(ACCOUNT_BALANCE) < boost_target) {
         return boostVol();
     }
 
-    if (risk_management == OPTIMIZED)
-    {
+    if (risk_management == OPTIMIZED) {
         return optimizedVol();
-    }
-    else if (risk_management == FIXED_PERCENTAGE)
-    {
+    } else if (risk_management == FIXED_PERCENTAGE) {
         return fixedPercentageVol();
-    }
-    else if (risk_management == EXPONENTIAL)
-    {
+    } else if (risk_management == EXPONENTIAL) {
         return exponentialVol();
     }
 
     return 0.01;
 }
 
-double fixedPercentageVol()
-{
+double fixedPercentageVol() {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double contract_price = cur_price * 0.01 / 3.67;
 
@@ -483,14 +421,13 @@ double fixedPercentageVol()
     double min_vol = 0.01;
     double max_vol = 300;
 
-    if (volume < min_vol)
-    {
+    if (volume < min_vol) {
         volume = min_vol;
-    }
-    else if (volume > max_vol)
-    {
+    } else if (volume > max_vol) {
         volume = max_vol;
     }
+
+    Print("Volume: ", NormalizeDouble(volume, 2));
 
     return NormalizeDouble(volume, 2);
 }
@@ -498,8 +435,7 @@ double fixedPercentageVol()
 //+------------------------------------------------------------------+
 //| Calculate optimal lot size                                       |
 //+------------------------------------------------------------------+
-double optimizedVol(void)
-{
+double optimizedVol(void) {
     double price = 0.0;
     double margin = 0.0;
 
@@ -520,20 +456,17 @@ double optimizedVol(void)
     double lot = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * max_risk / margin, 2);
 
     //--- calculate number of losses orders without a break1
-    if (decrease_factor > 0)
-    {
+    if (decrease_factor > 0) {
         //--- select history for access
         HistorySelect(0, TimeCurrent());
         //---
-        int orders = HistoryDealsTotal(); // total history deals
-        int losses = 0;                   // number of losses orders without a break
+        int orders = HistoryDealsTotal();  // total history deals
+        int losses = 0;                    // number of losses orders without a break
 
-        for (int i = orders - 1; i >= 0; i--)
-        {
+        for (int i = orders - 1; i >= 0; i--) {
             ulong ticket = HistoryDealGetTicket(i);
 
-            if (ticket == 0)
-            {
+            if (ticket == 0) {
                 Print("HistoryDealGetTicket failed, no trade history");
                 break;
             }
@@ -571,12 +504,13 @@ double optimizedVol(void)
     if (lot > maxvol)
         lot = maxvol;
 
+    Print("Volume: ", NormalizeDouble(lot, 2));
+
     //--- return trading volume
     return lot;
 }
 
-double boostVol(void)
-{
+double boostVol(void) {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double contract_price = cur_price * 0.01 / 3.67;
     double equity = AccountInfoDouble(ACCOUNT_EQUITY);
@@ -590,20 +524,18 @@ double boostVol(void)
     double min_vol = 0.01;
     double max_vol = 300;
 
-    if (volume < min_vol)
-    {
+    if (volume < min_vol) {
         volume = min_vol;
-    }
-    else if (volume > max_vol)
-    {
+    } else if (volume > max_vol) {
         volume = max_vol;
     }
+
+    Print("Volume: ", NormalizeDouble(volume, 2));
 
     return NormalizeDouble(volume, 2);
 }
 
-double exponentialVol(void)
-{
+double exponentialVol(void) {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double contract_price = cur_price * 0.01 / 3.67;
 
@@ -613,15 +545,13 @@ double exponentialVol(void)
 
     HistorySelect(0, TimeCurrent());
     //---
-    int orders = HistoryDealsTotal(); // total history deals
-    int consec_wins = 0;              // number of losses orders without a break
+    int orders = HistoryDealsTotal();  // total history deals
+    int consec_wins = 0;               // number of losses orders without a break
 
-    for (int i = orders - 1; i >= 0; i--)
-    {
+    for (int i = orders - 1; i >= 0; i--) {
         ulong ticket = HistoryDealGetTicket(i);
 
-        if (ticket == 0)
-        {
+        if (ticket == 0) {
             Print("HistoryDealGetTicket failed, no trade history");
             break;
         }
@@ -644,28 +574,33 @@ double exponentialVol(void)
     double min_vol = MathMax(0.01, free_margin * (5 / 100) / contract_price * 0.01);
     double max_vol = MathMin(300, free_margin / contract_price * 0.01);
 
-    if (volume < min_vol)
-    {
+    if (volume < min_vol) {
         volume = min_vol;
-    }
-    else if (volume > max_vol)
-    {
+    } else if (volume > max_vol) {
         volume = max_vol;
     }
+
+    Print("Volume: ", NormalizeDouble(volume, 2));
 
     return NormalizeDouble(volume, 2);
 }
 
-double OnTester()
-{
-#ifdef USE_R2_CRITERION
-    return GetR2onBalanceCurve();
-#else const double profit = TesterStatistics(STAT_PROFIT);
-    return sign(profit) * sqrt(fabs(profit)) * sqrt(TesterStatistics(STAT_PROFIT_FACTOR)) * sqrt(TesterStatistics(STAT_TRADES)) * sqrt(fabs(TesterStatistics(STAT_SHARPE_RATIO)));
-#endif
+double OnTester() {
+    if (test_criterion == MAXIMUM_FAVORABLE_EXCURSION) {
+        return GetMaximumFavorableExcursionOnBalanceCurve();
+    } else if (test_criterion == MEAN_ABSOLUTE_ERROR) {
+        return GetMeanAbsoluteErrorOnBalanceCurve();
+    } else if (test_criterion == ROOT_MEAN_SQUARED_ERROR) {
+        return GetRootMeanSquareErrorOnBalanceCurve();
+    } else if (test_criterion == R_SQUARED) {
+        return GetR2onBalanceCurve();
+    } else {
+        double profit = TesterStatistics(STAT_PROFIT);
+        return sign(profit) * sqrt(fabs(profit)) * sqrt(TesterStatistics(STAT_PROFIT_FACTOR)) * sqrt(TesterStatistics(STAT_TRADES)) * sqrt(fabs(TesterStatistics(STAT_SHARPE_RATIO))); 
+    }
+
 }
 
-double sign(const double x)
-{
+double sign(const double x) {
     return x > 0 ? +1 : (x < 0 ? -1 : 0);
 }
