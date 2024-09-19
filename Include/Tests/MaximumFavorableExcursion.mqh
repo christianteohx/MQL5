@@ -11,7 +11,7 @@ struct MFEData {
     MFEData() : mfe(0) {}
 };
 
-MFEData MaximumFavorableExcursion(const double &data[]) {
+MFEData MaximumFavorableExcursion(double &data[]) {
     int size = ArraySize(data);
     if (size <= 1)
         return MFEData();
@@ -32,13 +32,13 @@ MFEData MaximumFavorableExcursion(const double &data[]) {
     return result;
 }
 
-double MaximumFavorableExcursionTest(const double &data[]) {
+double MaximumFavorableExcursionTest(double &data[]) {
     const MFEData result = MaximumFavorableExcursion(data);
     return result.mfe;
 }
 
 double GetMaximumFavorableExcursionOnBalanceCurve() {
-    HistorySelect(0, LONG_MAX);
+    HistorySelect(0, INT_MAX);
     const ENUM_DEAL_PROPERTY_DOUBLE props[STAT_PROPS] = {
         DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_FEE};
     double expenses[][STAT_PROPS];
@@ -60,5 +60,8 @@ double GetMaximumFavorableExcursionOnBalanceCurve() {
         balance[i + 1] = result + balance[i];
     }
     const double mfe = MaximumFavorableExcursionTest(balance);
+
+    ArrayFree(balance);
+
     return mfe;
 }

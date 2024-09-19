@@ -9,10 +9,10 @@
 //+------------------------------------------------------------------+
 //| Include                                                          |
 //+------------------------------------------------------------------+
-#include <Expert\Expert.mqh>
-#include <Expert\Signal\SignalMACD.mqh>
-#include <Expert\Trailing\TrailingNone.mqh>
-#include <Expert\Money\MoneyNone.mqh>
+#include <Expert/Expert.mqh>
+#include <Expert/Signal/SignalMACD.mqh>
+#include <Expert/Trailing/TrailingNone.mqh>
+#include <Expert/Money/MoneyNone.mqh>
 //+------------------------------------------------------------------+
 //| Inputs                                                           |
 //+------------------------------------------------------------------+

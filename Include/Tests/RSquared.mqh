@@ -53,7 +53,7 @@ double RSquaredTest(const double &data[]) {
 }
 
 double GetR2onBalanceCurve() {
-    HistorySelect(0, LONG_MAX);
+    HistorySelect(0, INT_MAX);
     const ENUM_DEAL_PROPERTY_DOUBLE props[STAT_PROPS] = {
         DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_FEE};
     double expenses[][STAT_PROPS];
@@ -75,5 +75,8 @@ double GetR2onBalanceCurve() {
         balance[i + 1] = result + balance[i];
     }
     const double r2 = RSquaredTest(balance);
+
+    ArrayFree(balance);
+    
     return r2 * 100;
 }

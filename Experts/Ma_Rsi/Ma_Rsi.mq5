@@ -3,7 +3,6 @@
 //|                                  Copyright 2024, MetaQuotes Ltd. |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-#include <MQL5Book/DealFilter.mqh>
 #include <Tests/MaximumFavorableExcursion.mqh>
 #include <Tests/MeanAbsoluteError.mqh>
 #include <Tests/RSquared.mqh>
@@ -11,7 +10,6 @@
 #include <Trade/AccountInfo.mqh>
 #include <Trade/Trade.mqh>
 
-#define USE_R2_CRITERION
 //+------------------------------------------------------------------+
 //| Input variables                                                  |
 //+------------------------------------------------------------------+
@@ -38,7 +36,10 @@ enum TEST_CRITERION {
     MAXIMUM_FAVORABLE_EXCURSION,
     MEAN_ABSOLUTE_ERROR,
     ROOT_MEAN_SQUARED_ERROR,
-    R_SQUARED
+    R_SQUARED,
+    WIN_RATE,
+    CUSTOMIZED_MAX,
+    NONE,
 };
 
 sinput string s0;  //-----------------Strategy-----------------
@@ -86,6 +87,7 @@ double rsi_buffer[];  // Buffer RSI
 //| Variable for functions                                           |
 //+------------------------------------------------------------------+
 int magic_number = 50357114;  // Magic number
+double points = 0.01;
 
 MqlRates candle[];  // Variable for storing candles
 MqlTick tick;       // Variable for storing ticks
@@ -102,12 +104,12 @@ int OnInit() {
             return -1;
         }
     } else if (ma_strategy == DOUBLE_MA) {
-        if (first_ema_period > second_ema_period) {
+        if (first_ema_period >= second_ema_period) {
             Alert("Invalid EMA period");
             return -1;
         }
     } else if (ma_strategy == TRIPLE_MA) {
-        if (first_ema_period > second_ema_period || second_ema_period > third_ema_period) {
+        if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
             Alert("Invalid EMA period");
             return -1;
         }
@@ -167,7 +169,6 @@ void OnDeinit(const int reason) {
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
-    Print("Point: ", _Point);
     if (!TerminalInfoInteger(TERMINAL_TRADE_ALLOWED)) {
         Print("Trading is not allowed on this terminal.");
         return;
@@ -220,11 +221,11 @@ void OnTick() {
         Buy = (buy_ma_cross && buy_triple_ma);
         Sell = (sell_ma_cross && sell_triple_ma);
 
-        if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
-            Buy = true;
-        } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
-            Sell = true;
-        }
+        // if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
+        //     Buy = true;
+        // } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
+        //     Sell = true;
+        // }
     }
 
     if (rsi_strategy != NO_RSI) {
@@ -304,13 +305,14 @@ void BuyAtMarket() {
     double tp = 0;
 
     if (SL > 0)
-        sl = NormalizeDouble(tick.ask - (SL / _Point), _Digits);
+        sl = NormalizeDouble(tick.ask - (SL / points), 2);
     if (TP > 0)
-        tp = NormalizeDouble(tick.ask + (TP / _Point), _Digits);
+        tp = NormalizeDouble(tick.ask + (TP / points), 2);
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp)) {
         Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
               ". Code description: ", ExtTrade.ResultRetcodeDescription());
+        Print("Ask: ", tick.ask, " SL: ", sl, " TP: ", tp);
     } else {
         // Print("Order Buy Executed successfully!");
     }
@@ -321,13 +323,14 @@ void SellAtMarket() {
     double tp = 0;
 
     if (SL > 0)
-        sl = NormalizeDouble(tick.bid + (SL / _Point), _Digits);
+        sl = NormalizeDouble(tick.bid + (SL / points), 2);
     if (TP > 0)
-        tp = NormalizeDouble(tick.bid - (TP / _Point), _Digits);
+        tp = NormalizeDouble(tick.bid - (TP / points), 2);
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.bid, sl, tp)) {
         Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
               ". Code description: ", ExtTrade.ResultRetcodeDescription());
+        Print("Bid: ", tick.bid, " SL: ", sl, " TP: ", tp);
     } else {
         // Print(("Order Sell Executed successfully!"));
     }
@@ -355,9 +358,8 @@ void updateSLTP() {
 
     for (int i = 0; i < total; i++) {
         //--- parameters of the order
-        ulong position_ticket = PositionGetTicket(i);                         // ticket of the position
-        string position_symbol = PositionGetString(POSITION_SYMBOL);          // symbol
-        int digits = (int)SymbolInfoInteger(position_symbol, SYMBOL_DIGITS);  // number of decimal places
+        ulong position_ticket = PositionGetTicket(i);                 // ticket of the position
+        string position_symbol = PositionGetString(POSITION_SYMBOL);  // symbol
 
         double profit = PositionGetDouble(POSITION_PROFIT);  // open price
 
@@ -366,26 +368,28 @@ void updateSLTP() {
             double take_profit = PositionGetDouble(POSITION_TP);
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                if (trailing_sl && stop_loss < tick.bid - (SL / _Point)) {
-                    stop_loss = NormalizeDouble(tick.bid - (SL / _Point), digits);
+                if (trailing_sl && stop_loss < tick.bid - (SL / points)) {
+                    stop_loss = NormalizeDouble(tick.bid - (SL / points), 2);
                 }
 
                 if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
                     //--- failure message
                     Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                    Print("Bid: ", tick.bid, " SL: ", stop_loss);
                 } else {
                     // Print(("Order Update Stop Loss Buy Executed successfully!"));
                 }
             } else {
-                if (trailing_sl && stop_loss > tick.ask + (SL / _Point)) {
-                    stop_loss = NormalizeDouble(tick.ask + (SL / _Point), digits);
+                if (trailing_sl && stop_loss > tick.ask + (SL / points)) {
+                    stop_loss = NormalizeDouble(tick.ask + (SL / points), 2);
                 }
 
                 if (!ExtTrade.PositionModify(position_ticket, stop_loss, 0)) {
                     //--- failure message
                     Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                    Print("Ask: ", tick.ask, " SL: ", stop_loss);
                 } else {
                     // Print(("Order Update Stop Loss Sell Executed successfully!"));
                 }
@@ -395,7 +399,7 @@ void updateSLTP() {
 }
 
 double getVolume() {
-    if (boost == true && AccountInfoDouble(ACCOUNT_BALANCE) < boost_target) {
+    if (boost == true && boost_target > 0 && (ACCOUNT_BALANCE) < boost_target) {
         return boostVol();
     }
 
@@ -427,8 +431,6 @@ double fixedPercentageVol() {
         volume = max_vol;
     }
 
-    Print("Volume: ", NormalizeDouble(volume, 2));
-
     return NormalizeDouble(volume, 2);
 }
 
@@ -448,10 +450,6 @@ double optimizedVol(void) {
 
     if (margin <= 0.0)
         return (0.0);
-
-    // Print("Account Margin Free: " + DoubleToString(AccountInfoDouble(ACCOUNT_MARGIN_FREE)));
-    // Print("Maximum Risk: " + DoubleToString(max_risk));
-    // Print("Margin: " + DoubleToString(margin));
 
     double lot = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * max_risk / margin, 2);
 
@@ -504,8 +502,6 @@ double optimizedVol(void) {
     if (lot > maxvol)
         lot = maxvol;
 
-    Print("Volume: ", NormalizeDouble(lot, 2));
-
     //--- return trading volume
     return lot;
 }
@@ -529,8 +525,6 @@ double boostVol(void) {
     } else if (volume > max_vol) {
         volume = max_vol;
     }
-
-    Print("Volume: ", NormalizeDouble(volume, 2));
 
     return NormalizeDouble(volume, 2);
 }
@@ -580,27 +574,63 @@ double exponentialVol(void) {
         volume = max_vol;
     }
 
-    Print("Volume: ", NormalizeDouble(volume, 2));
-
     return NormalizeDouble(volume, 2);
 }
 
 double OnTester() {
+    double score = 0.0;
+
     if (test_criterion == MAXIMUM_FAVORABLE_EXCURSION) {
-        return GetMaximumFavorableExcursionOnBalanceCurve();
+        score = GetMaximumFavorableExcursionOnBalanceCurve();
     } else if (test_criterion == MEAN_ABSOLUTE_ERROR) {
-        return GetMeanAbsoluteErrorOnBalanceCurve();
+        score = GetMeanAbsoluteErrorOnBalanceCurve();
     } else if (test_criterion == ROOT_MEAN_SQUARED_ERROR) {
-        return GetRootMeanSquareErrorOnBalanceCurve();
+        score = GetRootMeanSquareErrorOnBalanceCurve();
     } else if (test_criterion == R_SQUARED) {
-        return GetR2onBalanceCurve();
-    } else {
+        score = GetR2onBalanceCurve();
+    } else if (test_criterion == CUSTOMIZED_MAX) {
+        score = customized_max();
+    } else if (test_criterion == WIN_RATE) {
+        double totalTrades = TesterStatistics(STAT_TRADES);       // Total number of trades
+        double wonTrades = TesterStatistics(STAT_PROFIT_TRADES);  // Number of winning trades
+        score = wonTrades / totalTrades;
+    } else if (test_criterion == NONE) {
         double profit = TesterStatistics(STAT_PROFIT);
-        return sign(profit) * sqrt(fabs(profit)) * sqrt(TesterStatistics(STAT_PROFIT_FACTOR)) * sqrt(TesterStatistics(STAT_TRADES)) * sqrt(fabs(TesterStatistics(STAT_SHARPE_RATIO))); 
+        score = sign(profit) * sqrt(fabs(profit)) * sqrt(TesterStatistics(STAT_PROFIT_FACTOR)) * sqrt(TesterStatistics(STAT_TRADES)) * sqrt(fabs(TesterStatistics(STAT_SHARPE_RATIO)));
+        score = 0.00;
     }
 
+    return score;
 }
 
 double sign(const double x) {
     return x > 0 ? +1 : (x < 0 ? -1 : 0);
+}
+
+double customized_max() {
+    double netProfit = TesterStatistics(STAT_PROFIT);          // Net profit
+    double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);     // Maximum equity drawdown
+    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT);  // Gross profit
+    double grossLoss = TesterStatistics(STAT_GROSS_LOSS);      // Gross loss
+    double totalTrades = TesterStatistics(STAT_TRADES);        // Total number of trades
+    double wonTrades = TesterStatistics(STAT_PROFIT_TRADES);   // Number of winning trades
+
+    // Calculate Profit Factor
+    double profitFactor = 0;
+    if (grossLoss != 0)
+        profitFactor = grossProfit / MathAbs(grossLoss);
+
+    // Calculate Win Rate
+    double winRate = 0;
+    if (totalTrades > 0)
+        winRate = wonTrades / totalTrades;
+
+    // Avoid division by zero
+    if (maxDrawdown == 0)
+        maxDrawdown = 1;
+
+    // Compute the Optimization Criterion
+    double criterion = (netProfit / maxDrawdown) * profitFactor * winRate;
+
+    return criterion;
 }

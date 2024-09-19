@@ -11,7 +11,7 @@ struct MAEData {
     MAEData() : mae(0) {}
 };
 
-MAEData MeanAbsoluteError(const double &actual[], const double &predicted[]) {
+MAEData MeanAbsoluteError(double &actual[], double &predicted[]) {
     int size = MathMin(ArraySize(actual), ArraySize(predicted));
     if (size <= 1)
         return MAEData();
@@ -31,13 +31,13 @@ MAEData MeanAbsoluteError(const double &actual[], const double &predicted[]) {
     return result;
 }
 
-double MeanAbsoluteErrorTest(const double &actual[], const double &predicted[]) {
+double MeanAbsoluteErrorTest(double &actual[], double &predicted[]) {
     const MAEData result = MeanAbsoluteError(actual, predicted);
     return result.mae;
 }
 
 double GetMeanAbsoluteErrorOnBalanceCurve() {
-    HistorySelect(0, LONG_MAX);
+    HistorySelect(0, INT_MAX);
     const ENUM_DEAL_PROPERTY_DOUBLE props[STAT_PROPS] = {
         DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_FEE};
     double expenses[][STAT_PROPS];
@@ -69,5 +69,9 @@ double GetMeanAbsoluteErrorOnBalanceCurve() {
     }
 
     const double mae = MeanAbsoluteErrorTest(balance, predictedBalance);
+
+    ArrayFree(balance);
+    ArrayFree(predictedBalance);
+
     return mae;
 }

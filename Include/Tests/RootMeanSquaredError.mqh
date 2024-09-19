@@ -38,7 +38,7 @@ double RootMeanSquareErrorTest(const double &actual[], const double &predicted[]
 }
 
 double GetRootMeanSquareErrorOnBalanceCurve() {
-    HistorySelect(0, LONG_MAX);
+    HistorySelect(0, INT_MAX);
     const ENUM_DEAL_PROPERTY_DOUBLE props[STAT_PROPS] = {
         DEAL_PROFIT, DEAL_SWAP, DEAL_COMMISSION, DEAL_FEE};
     double expenses[][STAT_PROPS];
@@ -70,5 +70,9 @@ double GetRootMeanSquareErrorOnBalanceCurve() {
     }
 
     const double rmse = RootMeanSquareErrorTest(balance, predictedBalance);
+
+    ArrayFree(balance);
+    ArrayFree(predictedBalance);
+    
     return rmse;
 }
