@@ -255,7 +255,7 @@ bool CCanvas::Create(const string name,const int width,const int height,ENUM_COL
       //--- generate uniq resource name
       string uniq=(string)ChartID()+(string)GetTickCount()+"."+(string)(GetMicrosecondCount()&0x3FF);
 
-      m_rcname="::" + StringSubstr(name,0,63-uniq.Length())+uniq;
+      m_rcname="::" + StringSubstr(name,0,63-StringLen(uniq))+uniq;
       //--- initialize data with zeros
       ArrayInitialize(m_pixels,0);
       //--- create dynamic resource
