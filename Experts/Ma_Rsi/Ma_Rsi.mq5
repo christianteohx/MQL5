@@ -536,15 +536,14 @@ void closeAllTrade() {
     for (int i = 0; i < total; i++) {
         ulong ticket = PositionGetTicket(i);
 
-        // TODO:Only if SL is in profit (higher/lower than open price)
-
-        last_close_position.buySell = PositionGetInteger(POSITION_TYPE);
-        last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
-
         if (!ExtTrade.PositionClose(ticket)) {
             Print("Close trade failed. Return code=", ExtTrade.ResultRetcode(),
                   ". Code description: ", ExtTrade.ResultRetcodeDescription());
         } else {
+            if (PositionGetDouble(POSITION_PROFIT) > 0) {
+                last_close_position.buySell = PositionGetInteger(POSITION_TYPE);
+                last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
+            }
             // Print("Close position successfully!");
         }
     }
