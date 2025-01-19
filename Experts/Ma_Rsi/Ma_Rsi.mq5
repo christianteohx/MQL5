@@ -32,6 +32,13 @@ enum MACD {
     HIST,
 };
 
+enum ADX {
+    NO_ADX,
+    ADX_ONLY,
+    ADX_PLUS_DI,
+    ADX_MINUS_DI,
+};
+
 enum RISK_MANAGEMENT {
     OPTIMIZED,
     FIXED_PERCENTAGE,
@@ -50,10 +57,17 @@ enum TEST_CRITERION {
     NONE,
 };
 
+enum TICKER {
+    BTCUSD,
+    XAUUSD
+};
+
 sinput string s0;  //-----------------Strategy-----------------
+input TICKER ticker = BTCUSD;
 input MA ma_strategy = TRIPLE_MA;
 input RSI rsi_strategy = LIMIT;
 input MACD macd_strategy = HIST;
+input ADX adx_strategy = ADX_ONLY;
 input RISK_MANAGEMENT risk_management = OPTIMIZED;
 
 sinput string s1;                  //-----------------Moving Average-----------------
@@ -70,6 +84,9 @@ sinput string s3;           //-----------------MACD-----------------
 input int macd_fast = 12;   // MACD Fast
 input int macd_slow = 26;   // MACD Slow
 input int macd_period = 9;  // MACD Period
+
+sinput string s4;           //-----------------ADX-----------------
+input int adx_period = 14;  // ADX period
 
 sinput string s4;                  //-----------------Risk Management-----------------
 input double SL = 10;              // Stop Loss
@@ -103,6 +120,11 @@ int macd_handle;              // Handle MACD
 double macd_main_buffer[];    // MACD Main Buffer
 double macd_signal_buffer[];  // MACD Signal Buffer
 
+int adx_handle;           // Handle ADX
+double adx_buffer[];      // ADX Main Buffer
+double DI_plusBuffer[];   // ADX Plus Buffer
+double DI_minusBuffer[];  // ADX Minus Buffer
+
 //+------------------------------------------------------------------+
 //| Variable for functions                                           |
 //+------------------------------------------------------------------+
@@ -125,6 +147,12 @@ struct closePosition {
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
+    if (ticker == BTCUSD) {
+    } else if (ticker == XAUUSD) {
+        // points = 1;
+        // contract_size = 0.1;
+    }
+
     Print("Points: ", points);
     Print("Contract Size: ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE));
     Print("Decimal: ", decimal);
@@ -160,6 +188,13 @@ int OnInit() {
         }
     }
 
+    if (adx_strategy != NO_ADX) {
+        if (adx_period < 1) {
+            Alert("Invalid ADX period");
+            return -1;
+        }
+    }
+
     ExtTrade.SetExpertMagicNumber(magic_number);
     ExtTrade.SetDeviationInPoints(10);
     ExtTrade.SetTypeFilling(ORDER_FILLING_FOK);
@@ -170,6 +205,7 @@ int OnInit() {
 
     rsi_handle = iRSI(_Symbol, _Period, rsi_period, PRICE_CLOSE);
     macd_handle = iMACD(_Symbol, _Period, macd_fast, macd_slow, macd_period, PRICE_CLOSE);
+    adx_handle = iADX(_Symbol, _Period, adx_period);
 
     // Check if the EMA was created successfully
     if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE) {
@@ -188,13 +224,16 @@ int OnInit() {
     ChartIndicatorAdd(0, 0, third_ema_handle);
     ChartIndicatorAdd(0, 1, rsi_handle);
     ChartIndicatorAdd(0, 2, macd_handle);
+    ChartIndicatorAdd(0, 3, adx_handle);
 
     SetIndexBuffer(0, first_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(2, third_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(3, rsi_buffer, INDICATOR_DATA);
-
-    // SetIndexBuffer(4, macd_buffer, INDICATOR_DATA);
+    SetIndexBuffer(4, macd_buffer, INDICATOR_DATA);
+    SetIndexBuffer(5, adx_buffer, INDICATOR_DATA);
+    SetIndexBuffer(6, DI_plusBuffer, INDICATOR_DATA);
+    SetIndexBuffer(7, DI_minusBuffer, INDICATOR_DATA);
 
     return (INIT_SUCCEEDED);
 }
@@ -209,8 +248,7 @@ void OnDeinit(const int reason) {
     IndicatorRelease(third_ema_handle);
     IndicatorRelease(rsi_handle);
     IndicatorRelease(macd_handle);
-
-    // backlog.Clear();
+    IndicatorRelease(adx_handle);
 }
 
 bool IsTradingTime() {
@@ -240,6 +278,9 @@ void OnTick() {
     CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer);
     CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer);    // MACD Main Line
     CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer);  // Signal Line
+    CopyBuffer(adx_handle, 0, 0, 4, adx_buffer);           // ADX
+    CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer);         // DI+
+    CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer);        // DI-
 
     // Feed candle buffers with data
     CopyRates(_Symbol, _Period, 0, 4, candle);
@@ -252,6 +293,9 @@ void OnTick() {
     ArraySetAsSeries(rsi_buffer, true);
     ArraySetAsSeries(macd_main_buffer, true);
     ArraySetAsSeries(macd_signal_buffer, true);
+    ArraySetAsSeries(adx_buffer, true);
+    ArraySetAsSeries(DI_plusBuffer, true);
+    ArraySetAsSeries(DI_minusBuffer, true);
 
     SymbolInfoTick(_Symbol, tick);
 
@@ -260,12 +304,14 @@ void OnTick() {
     bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
     bool buy_rsi = true;
     bool buy_macd = true;
+    bool buy_adx = true;
 
     bool sell_single_ma = candle[1].open > first_ema_buffer[1] && candle[1].close < first_ema_buffer[1];
     bool sell_ma_cross = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
     bool sell_rsi = true;
     bool sell_macd = true;
+    bool sell_adx = true;
 
     if (rsi_strategy == COMPARISON) {
         buy_rsi = rsi_buffer[0] > rsi_buffer[1];
@@ -281,6 +327,17 @@ void OnTick() {
     } else if (macd_strategy == HIST) {
         buy_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) > 0;
         sell_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) < 0;
+    }
+
+    if (adx_strategy == ADX_ONLY) {
+        buy_adx = adx_buffer[0] > adx_buffer[1];
+        sell_adx = adx_buffer[0] < adx_buffer[1];
+    } else if (adx_strategy == ADX_PLUS_DI) {
+        buy_adx = DI_plusBuffer[0] > DI_minusBuffer[0];
+        sell_adx = DI_plusBuffer[0] < DI_minusBuffer[0];
+    } else if (adx_strategy == ADX_MINUS_DI) {
+        buy_adx = DI_plusBuffer[0] < DI_minusBuffer[0];
+        sell_adx = DI_plusBuffer[0] > DI_minusBuffer[0];
     }
 
     bool Buy = true;
@@ -313,12 +370,20 @@ void OnTick() {
         Sell = Sell && sell_macd;
     }
 
+    if (adx_strategy != NO_ADX) {
+        Buy = Buy && buy_adx;
+        Sell = Sell && sell_adx;
+    }
+
     bool newBar = isNewBar();
     bool tradeTime = IsTradingTime();
+
+    // tradeTime = true;
 
     if (tradeTime) {
         if (newBar) {
             if (Buy && !Sell) {
+                printf("Buy");
                 closeAllTrade();
                 // drawVerticalLine("Buy", candle[1].time, clrGreen);
                 const string message = "Buy Signal for " + _Symbol;
@@ -327,6 +392,7 @@ void OnTick() {
             }
 
             if (Sell && !Buy) {
+                printf("Sell");
                 closeAllTrade();
                 // drawVerticalLine("Sell", candle[1].time, clrRed);
                 const string message = "Sell Signal for " + _Symbol;
@@ -393,9 +459,9 @@ void BuyAtMarket(string comments = "") {
     double tp = 0;
 
     if (SL > 0)
-        sl = NormalizeDouble(tick.ask - (SL * points), decimal);
+        sl = NormalizeDouble(tick.ask - (SL), decimal);
     if (TP > 0)
-        tp = NormalizeDouble(tick.ask + (TP * points), decimal);
+        tp = NormalizeDouble(tick.ask + (TP), decimal);
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp, comments)) {
         Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
@@ -412,9 +478,9 @@ void SellAtMarket(string comments = "") {
     double tp = 0;
 
     if (SL > 0)
-        sl = NormalizeDouble(tick.bid + (SL * points), decimal);
+        sl = NormalizeDouble(tick.bid + (SL), decimal);
     if (TP > 0)
-        tp = NormalizeDouble(tick.bid - (TP * points), decimal);
+        tp = NormalizeDouble(tick.bid - (TP), decimal);
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_SELL, getVolume(), tick.bid, sl, tp, comments)) {
         Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
@@ -470,6 +536,8 @@ void closeAllTrade() {
     for (int i = 0; i < total; i++) {
         ulong ticket = PositionGetTicket(i);
 
+        // TODO:Only if SL is in profit (higher/lower than open price)
+
         last_close_position.buySell = PositionGetInteger(POSITION_TYPE);
         last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
 
@@ -503,12 +571,12 @@ void updateSLTP() {
             double take_profit = prev_take_profit;
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                if (trailing_sl && (stop_loss < tick.bid - (SL * points) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.bid - (SL * points), decimal);
+                if (trailing_sl && (stop_loss < tick.bid - (SL) || stop_loss == 0)) {
+                    stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
                 }
 
                 if (TP > 0) {
-                    take_profit = NormalizeDouble(tick.bid + (TP * points), decimal);
+                    take_profit = NormalizeDouble(tick.bid + (TP), decimal);
                 } else {
                     take_profit = NormalizeDouble(0, decimal);
                 }
@@ -526,12 +594,12 @@ void updateSLTP() {
                     // Print(("Order Update Stop Loss Buy Executed successfully!"));
                 }
             } else {
-                if (trailing_sl && (stop_loss > tick.ask + (SL * points) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.ask + (SL * points), decimal);
+                if (trailing_sl && (stop_loss > tick.ask + (SL) || stop_loss == 0)) {
+                    stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
                 }
 
                 if (TP > 0) {
-                    take_profit = NormalizeDouble(tick.ask - (TP * points), decimal);
+                    take_profit = NormalizeDouble(tick.ask - (TP), decimal);
                 } else {
                     take_profit = NormalizeDouble(0, decimal);
                 }
@@ -554,8 +622,12 @@ void updateSLTP() {
 }
 
 int getVolume() {
-    if (boost == true && boost_target > 0 && (ACCOUNT_BALANCE) < boost_target) {
-        return boostVol();
+    if (boost == true && boost_target > 0) {
+        if (ACCOUNT_BALANCE < boost_target) {
+            return boostVol();
+        } else {
+            return optimizedVol();
+        }
     }
 
     if (risk_management == OPTIMIZED) {
@@ -662,7 +734,7 @@ int optimizedVol(void) {
 
 int boostVol(void) {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double contract_price = cur_price * contract_size / 3.67;
+    double contract_price = cur_price * contract_size;
     double equity = AccountInfoDouble(ACCOUNT_EQUITY);
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
@@ -670,6 +742,9 @@ int boostVol(void) {
 
     double risk = MathMin(MathSqrt(MathPow(boost_target, 2) / MathPow(balance, 2)) * minRisk, 100);
     double volume = equity * (risk / 100) / contract_price;
+
+    printf("Risk: %.2f", risk);
+    printf("Volume: %.2f", volume);
 
     double min_vol = 1;
     double max_vol = 300;
