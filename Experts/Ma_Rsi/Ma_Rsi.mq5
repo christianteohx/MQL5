@@ -88,7 +88,7 @@ input int macd_period = 9;  // MACD Period
 sinput string s4;           //-----------------ADX-----------------
 input int adx_period = 14;  // ADX period
 
-sinput string s4;                  //-----------------Risk Management-----------------
+sinput string s5;                  //-----------------Risk Management-----------------
 input double SL = 10;              // Stop Loss
 input double TP = 10;              // Take Profit
 input int percent_change = 5;      // Percent Change before re-buying
@@ -98,7 +98,7 @@ input double decrease_factor = 3;  // Descrease factor
 input bool boost = false;          // Use high risk until target reached
 input double boost_target = 5000;  // Boost target
 
-sinput string s5;                                 //-----------------Test-----------------
+sinput string s6z;                                 //-----------------Test-----------------
 input TEST_CRITERION test_criterion = R_SQUARED;  // Test criterion
 
 //+------------------------------------------------------------------+
@@ -230,10 +230,11 @@ int OnInit() {
     SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(2, third_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(3, rsi_buffer, INDICATOR_DATA);
-    SetIndexBuffer(4, macd_buffer, INDICATOR_DATA);
-    SetIndexBuffer(5, adx_buffer, INDICATOR_DATA);
-    SetIndexBuffer(6, DI_plusBuffer, INDICATOR_DATA);
-    SetIndexBuffer(7, DI_minusBuffer, INDICATOR_DATA);
+    SetIndexBuffer(4, macd_main_buffer, INDICATOR_DATA);
+    SetIndexBuffer(5, macd_signal_buffer, INDICATOR_DATA);
+    SetIndexBuffer(6, adx_buffer, INDICATOR_DATA);
+    SetIndexBuffer(7, DI_plusBuffer, INDICATOR_DATA);
+    SetIndexBuffer(8, DI_minusBuffer, INDICATOR_DATA);
 
     return (INIT_SUCCEEDED);
 }
@@ -279,8 +280,8 @@ void OnTick() {
     CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer);    // MACD Main Line
     CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer);  // Signal Line
     CopyBuffer(adx_handle, 0, 0, 4, adx_buffer);           // ADX
-    CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer);         // DI+
-    CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer);        // DI-
+    CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer);        // DI+
+    CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer);       // DI-
 
     // Feed candle buffers with data
     CopyRates(_Symbol, _Period, 0, 4, candle);
