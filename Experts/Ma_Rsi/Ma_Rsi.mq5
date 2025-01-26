@@ -34,9 +34,7 @@ enum MACD {
 
 enum ADX {
     NO_ADX,
-    ADX_ONLY,
-    ADX_PLUS_DI,
-    ADX_MINUS_DI,
+    USE_ADX,
 };
 
 enum RISK_MANAGEMENT {
@@ -54,6 +52,8 @@ enum TEST_CRITERION {
     SMALL_TRADES,
     BIG_TRADES,
     BALANCE_DRAWDOWN,
+    BALANCExRECOVERYxSHARPE,
+    HIGH_GROWTH,
     NONE,
 };
 
@@ -67,48 +67,62 @@ input TICKER ticker = BTCUSD;
 input MA ma_strategy = TRIPLE_MA;
 input RSI rsi_strategy = LIMIT;
 input MACD macd_strategy = HIST;
-input ADX adx_strategy = ADX_ONLY;
+input ADX adx_strategy = USE_ADX;
 input RISK_MANAGEMENT risk_management = OPTIMIZED;
 
 sinput string s1;                  //-----------------Moving Average-----------------
 input int first_ema_period = 13;   // first EMA period
 input int second_ema_period = 48;  // second EMA period
 input int third_ema_period = 200;  // third EMA period
+input double weightMA = 0.4;       // Weight for MA strategy
 
 sinput string s2;               //-----------------RSI-----------------
 input int rsi_period = 14;      // RSI period
 input int rsi_overbought = 70;  // RSI overbought level
 input int rsi_oversold = 30;    // RSI oversold level
+input double weightRSI = 0.3;   // Weight for RSI strategy
 
-sinput string s3;           //-----------------MACD-----------------
-input int macd_fast = 12;   // MACD Fast
-input int macd_slow = 26;   // MACD Slow
-input int macd_period = 9;  // MACD Period
+sinput string s3;               //-----------------MACD-----------------
+input int macd_fast = 12;       // MACD Fast
+input int macd_slow = 26;       // MACD Slow
+input int macd_period = 9;      // MACD Period
+input double weightMACD = 0.2;  // Weight for MACD strategy
 
-sinput string s4;           //-----------------ADX-----------------
-input int adx_period = 14;  // ADX period
+sinput string s4;              //-----------------ADX-----------------
+input int adx_period = 14;     // ADX period
+input int adx_diff = 20;       // ADX difference
+input double weightADX = 0.1;  // Weight for ADX strategy
 
-sinput string s5;                  //-----------------Risk Management-----------------
-input double SL = 10;              // Stop Loss
-input double TP = 10;              // Take Profit
-input int percent_change = 5;      // Percent Change before re-buying
-input bool trailing_sl = true;     // Trailing Stop Loss
-input int max_risk = 10;           // Maximum risk (%) per trade
-input double decrease_factor = 3;  // Descrease factor
-input bool boost = false;          // Use high risk until target reached
-input double boost_target = 5000;  // Boost target
+sinput string s5;                   //-----------------Risk Management-----------------
+input bool use_threshold = true;    // Use threshold
+input double buy_threshold = 0.5;   // Buy Threshold
+input double sell_threshold = 0.5;  // Sell Threshold
+input double SL = 10;               // Stop Loss
+input double TP = 10;               // Take Profit
+input int percent_change = 5;       // Percent Change before re-buying
+input bool trailing_sl = true;      // Trailing Stop Loss
+input int max_risk = 10;            // Maximum risk (%) per trade
+input double decrease_factor = 3;   // Descrease factor
+input bool boost = false;           // Use high risk until target reached
+input double boost_target = 5000;   // Boost target
 
-sinput string s6z;                                 //-----------------Test-----------------
+sinput string s6;                                 //-----------------Test-----------------
 input TEST_CRITERION test_criterion = R_SQUARED;  // Test criterion
 
 //+------------------------------------------------------------------+
 //| Variable for indicators                                          |
 //+------------------------------------------------------------------+
+double totalWeight = 0.0;
+double normalizedWeightMa = 0.0;    // Normalized weight for MA
+double normalizedWeightRsi = 0.0;   // Normalized weight for RSI
+double normalizedWeightMacd = 0.0;  // Normalized weight for MACD
+double normalizedWeightAdx = 0.0;   // Normalized weight for ADX
+
 int first_ema_handle;       // Handle First EMA
 double first_ema_buffer[];  // Buffer First EMA
 
-int second_ema_handle;       // Handle secondium EMA
-double second_ema_buffer[];  // Buffer secondium EMA
+int second_ema_handle;       // Handle second EMA
+double second_ema_buffer[];  // Buffer second EMA
 
 int third_ema_handle;       // Handle third EMA
 double third_ema_buffer[];  // Buffer third EMA
@@ -213,6 +227,40 @@ int OnInit() {
         return -1;
     }
 
+    // Check active indicators and sum their weights
+    if (ma_strategy != NO_MA) {
+        totalWeight += weightMA;
+    }
+
+    if (rsi_strategy != NO_RSI) {
+        totalWeight += weightRSI;
+    }
+
+    if (macd_strategy != NO_MACD) {
+        totalWeight += weightMACD;
+    }
+
+    if (adx_strategy != NO_ADX) {
+        totalWeight += weightADX;
+    }
+
+    // normalize weights for active indicators
+    if (ma_strategy != NO_MA) {
+        normalizedWeightMa = weightMA / totalWeight;
+    }
+
+    if (rsi_strategy != NO_RSI) {
+        normalizedWeightRsi = weightRSI / totalWeight;
+    }
+
+    if (macd_strategy != NO_MACD) {
+        normalizedWeightMacd = weightMACD / totalWeight;
+    }
+
+    if (adx_strategy != NO_ADX) {
+        normalizedWeightAdx = weightADX / totalWeight;
+    }
+
     last_close_position.buySell = NULL;
     last_close_position.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
@@ -300,6 +348,13 @@ void OnTick() {
 
     SymbolInfoTick(_Symbol, tick);
 
+    double buy_confidence = 0.0;
+    double sell_confidence = 0.0;
+    double confidenceMA = 0.0;
+    double confidenceRSI = 0.0;
+    double confidenceMACD = 0.0;
+    double confidenceADX = 0.0;
+
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
     bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
     bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
@@ -330,15 +385,9 @@ void OnTick() {
         sell_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) < 0;
     }
 
-    if (adx_strategy == ADX_ONLY) {
-        buy_adx = adx_buffer[0] > adx_buffer[1];
-        sell_adx = adx_buffer[0] < adx_buffer[1];
-    } else if (adx_strategy == ADX_PLUS_DI) {
-        buy_adx = DI_plusBuffer[0] > DI_minusBuffer[0];
-        sell_adx = DI_plusBuffer[0] < DI_minusBuffer[0];
-    } else if (adx_strategy == ADX_MINUS_DI) {
-        buy_adx = DI_plusBuffer[0] < DI_minusBuffer[0];
-        sell_adx = DI_plusBuffer[0] > DI_minusBuffer[0];
+    if (adx_strategy == USE_ADX) {
+        buy_adx = (DI_plusBuffer[0] - DI_minusBuffer[0]) > adx_diff;
+        sell_adx = (DI_minusBuffer[0] - DI_plusBuffer[0]) > adx_diff;
     }
 
     bool Buy = true;
@@ -347,53 +396,93 @@ void OnTick() {
     if (ma_strategy == SINGLE_MA) {
         Buy = buy_single_ma;
         Sell = sell_single_ma;
+        confidenceMA = buy_single_ma ? 1.0 : (sell_single_ma ? -1.0 : 0.0);
     } else if (ma_strategy == DOUBLE_MA) {
         Buy = buy_ma_cross;
         Sell = sell_ma_cross;
+        confidenceMA = buy_ma_cross ? 1.0 : (sell_ma_cross ? -1.0 : 0.0);
     } else if (ma_strategy == TRIPLE_MA) {
-        Buy = (buy_ma_cross && buy_triple_ma);
-        Sell = (sell_ma_cross && sell_triple_ma);
+        Buy = buy_ma_cross && buy_triple_ma;
+        Sell = sell_ma_cross && sell_triple_ma;
+        confidenceMA = (buy_ma_cross && buy_triple_ma) ? 1.0 : ((sell_ma_cross && sell_triple_ma) ? -1.0 : 0.0);
 
-        if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
-            Buy = true;
-        } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
-            Sell = true;
-        }
+        // if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
+        //     Buy = true;
+        // } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
+        //     Sell = true;
+        // }
     }
 
     if (rsi_strategy != NO_RSI) {
         Buy = Buy && buy_rsi;
         Sell = Sell && sell_rsi;
+        confidenceRSI = buy_rsi ? 1.0 : (sell_rsi ? -1.0 : 0.0);
     }
 
     if (macd_strategy != NO_MACD) {
         Buy = Buy && buy_macd;
         Sell = Sell && sell_macd;
+        confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
     }
 
     if (adx_strategy != NO_ADX) {
         Buy = Buy && buy_adx;
         Sell = Sell && sell_adx;
+        confidenceADX = buy_adx ? 1.0 : (sell_adx ? -1.0 : 0.0);
     }
+
+    if (ma_strategy != NO_MA) {
+        buy_confidence += confidenceMA * normalizedWeightMa;
+        sell_confidence += -confidenceMA * normalizedWeightMa;
+    }
+
+    if (rsi_strategy != NO_RSI) {
+        buy_confidence += confidenceRSI * normalizedWeightRsi;
+        sell_confidence += -confidenceRSI * normalizedWeightRsi;
+    }
+
+    if (macd_strategy != NO_MACD) {
+        buy_confidence += confidenceMACD * normalizedWeightMacd;
+        sell_confidence += -confidenceMACD * normalizedWeightMacd;
+    }
+
+    if (adx_strategy != NO_ADX) {
+        buy_confidence += confidenceADX * normalizedWeightAdx;
+        sell_confidence += -confidenceADX * normalizedWeightAdx;
+    }
+
+    // Ensure confidence is within [0,1]
+    buy_confidence = MathMax(0.0, MathMin(1.0, buy_confidence));
+    sell_confidence = MathMax(0.0, MathMin(1.0, sell_confidence));
 
     bool newBar = isNewBar();
     bool tradeTime = IsTradingTime();
 
-    // tradeTime = true;
+    tradeTime = true;
 
     if (tradeTime) {
         if (newBar) {
-            if (Buy && !Sell) {
-                printf("Buy");
+            if (!use_threshold && Buy) {
                 closeAllTrade();
-                // drawVerticalLine("Buy", candle[1].time, clrGreen);
+                const string message = "Buy Signal for " + _Symbol;
+                SendNotification(message);
+                BuyAtMarket();
+                return;
+            } else if (buy_confidence >= buy_threshold) {
+                closeAllTrade();
                 const string message = "Buy Signal for " + _Symbol;
                 SendNotification(message);
                 BuyAtMarket();
             }
 
-            if (Sell && !Buy) {
-                printf("Sell");
+            if (!use_threshold && Sell) {
+                closeAllTrade();
+                const string message = "Sell Signal for " + _Symbol;
+                SendNotification(message);
+                SellAtMarket();
+                return;
+            } else if (sell_confidence >= sell_threshold) {
+                // printf("Sell");
                 closeAllTrade();
                 // drawVerticalLine("Sell", candle[1].time, clrRed);
                 const string message = "Sell Signal for " + _Symbol;
@@ -409,7 +498,7 @@ void OnTick() {
     ArrayFree(rsi_buffer);
 
     if (percent_change > 0 && !CheckForOpenTrade()) {
-        printf("No open trades");
+        // printf("No open trades");
         CheckPercentChange();
     }
 
@@ -641,7 +730,7 @@ int getVolume() {
 
 int fixedPercentageVol() {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double contract_price = cur_price * contract_size / 3.67;
+    double contract_price = cur_price * (contract_size / 10) / 3.67;
     double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
     double risk = max_risk;
     double volume = free_margin * (risk / 100) / contract_price;
@@ -734,7 +823,7 @@ int optimizedVol(void) {
 
 int boostVol(void) {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double contract_price = cur_price * contract_size;
+    double contract_price = cur_price * (contract_size / 10);
     double equity = AccountInfoDouble(ACCOUNT_EQUITY);
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
 
@@ -763,7 +852,9 @@ int boostVol(void) {
 double OnTester() {
     double score = 0.0;
 
-    if (test_criterion == MAXIMUM_FAVORABLE_EXCURSION) {
+    if (test_criterion == BALANCExRECOVERYxSHARPE) {
+        score = GetBalanceRecoverySharpeRatio();
+    } else if (test_criterion == MAXIMUM_FAVORABLE_EXCURSION) {
         score = GetMaximumFavorableExcursionOnBalanceCurve();
     } else if (test_criterion == MEAN_ABSOLUTE_ERROR) {
         score = GetMeanAbsoluteErrorOnBalanceCurve();
@@ -782,13 +873,14 @@ double OnTester() {
         } else {
             score = wonTrades / totalTrades;
         }
-
     } else if (test_criterion == SMALL_TRADES) {
         score = small_trades();
     } else if (test_criterion == BIG_TRADES) {
         score = big_trades();
     } else if (test_criterion == BALANCE_DRAWDOWN) {
         score = -TesterStatistics(STAT_BALANCEDD_PERCENT);
+    } else if (test_criterion == HIGH_GROWTH) {
+        score = highGrowth();
     } else if (test_criterion == NONE) {
         score = none();
     }
@@ -798,6 +890,52 @@ double OnTester() {
 
 double sign(const double x) {
     return x > 0 ? +1 : (x < 0 ? -1 : 0);
+}
+
+double highGrowth() {
+    double netProfit = TesterStatistics(STAT_PROFIT);
+    double maxDrawdown = TesterStatistics(STAT_BALANCE_DD);
+
+    double maxDrawdownPercent = TesterStatistics(STAT_BALANCEDD_PERCENT);
+    if (maxDrawdownPercent <= 0) maxDrawdownPercent = 0.1;  // Avoid zero division
+
+    // Score formula
+    double score = (netProfit * 1.5) / maxDrawdownPercent;
+
+    // Penalize negative profit heavily
+    if (netProfit < 0) {
+        score *= 0.1;  // Reduce score significantly for losing strategies
+    }
+
+    return score;
+}
+
+double GetBalanceRecoverySharpeRatio() {
+    double netProfit = TesterStatistics(STAT_PROFIT);
+    double recoveryFactor = TesterStatistics(STAT_RECOVERY_FACTOR);
+    double sharpeRatio = TesterStatistics(STAT_SHARPE_RATIO);
+
+    // Normalize values (example scale factor, adjust based on data range)
+    double normalizedProfit = netProfit / 1000.0;
+    double normalizedRecovery = recoveryFactor / 10.0;
+    double normalizedSharpe = sharpeRatio / 5.0;
+
+    // Weight components
+    double weightProfit = 0.5;
+    double weightRecovery = 0.3;
+    double weightSharpe = 0.2;
+
+    // Calculate score
+    double score = (weightProfit * normalizedProfit) *
+                       (weightRecovery * normalizedRecovery) +
+                   (weightSharpe * normalizedSharpe);
+
+    // Penalize negative profit
+    if (netProfit < 0 || recoveryFactor < 1 || sharpeRatio < 0.5) {
+        score *= 0.1;  // Halve the score for losing strategies
+    }
+
+    return score;
 }
 
 double customized_max() {
