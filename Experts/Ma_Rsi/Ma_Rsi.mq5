@@ -54,6 +54,7 @@ enum TEST_CRITERION {
     BALANCE_DRAWDOWN,
     BALANCExRECOVERYxSHARPE,
     HIGH_GROWTH,
+    PROFIT_MINUS_LOSS,
     NONE,
 };
 
@@ -65,33 +66,33 @@ enum TICKER {
 sinput string s0;  //-----------------Strategy-----------------
 input TICKER ticker = BTCUSD;
 input MA ma_strategy = TRIPLE_MA;
+input double weightMA = 0.4;  // Weight for MA strategy
 input RSI rsi_strategy = LIMIT;
+input double weightRSI = 0.3;  // Weight for RSI strategy
 input MACD macd_strategy = HIST;
+input double weightMACD = 0.2;  // Weight for MACD strategy
 input ADX adx_strategy = USE_ADX;
+input double weightADX = 0.1;  // Weight for ADX strategy
 input RISK_MANAGEMENT risk_management = OPTIMIZED;
 
 sinput string s1;                  //-----------------Moving Average-----------------
 input int first_ema_period = 13;   // first EMA period
 input int second_ema_period = 48;  // second EMA period
 input int third_ema_period = 200;  // third EMA period
-input double weightMA = 0.4;       // Weight for MA strategy
 
 sinput string s2;               //-----------------RSI-----------------
 input int rsi_period = 14;      // RSI period
 input int rsi_overbought = 70;  // RSI overbought level
 input int rsi_oversold = 30;    // RSI oversold level
-input double weightRSI = 0.3;   // Weight for RSI strategy
 
-sinput string s3;               //-----------------MACD-----------------
-input int macd_fast = 12;       // MACD Fast
-input int macd_slow = 26;       // MACD Slow
-input int macd_period = 9;      // MACD Period
-input double weightMACD = 0.2;  // Weight for MACD strategy
+sinput string s3;           //-----------------MACD-----------------
+input int macd_fast = 12;   // MACD Fast
+input int macd_slow = 26;   // MACD Slow
+input int macd_period = 9;  // MACD Period
 
-sinput string s4;              //-----------------ADX-----------------
-input int adx_period = 14;     // ADX period
-input int adx_diff = 20;       // ADX difference
-input double weightADX = 0.1;  // Weight for ADX strategy
+sinput string s4;           //-----------------ADX-----------------
+input int adx_period = 14;  // ADX period
+input int adx_diff = 20;    // ADX difference
 
 sinput string s5;                   //-----------------Risk Management-----------------
 input bool use_threshold = true;    // Use threshold
@@ -373,8 +374,8 @@ void OnTick() {
         buy_rsi = rsi_buffer[0] > rsi_buffer[1];
         sell_rsi = rsi_buffer[0] < rsi_buffer[1];
     } else if (rsi_strategy == LIMIT) {
-        buy_rsi = rsi_buffer[0] < rsi_overbought;
-        sell_rsi = rsi_buffer[0] > rsi_oversold;
+        buy_rsi = rsi_buffer[0] < rsi_oversold;
+        sell_rsi = rsi_buffer[0] > rsi_overbought;
     }
 
     if (macd_strategy == SIGNAL) {
@@ -462,32 +463,10 @@ void OnTick() {
 
     if (tradeTime) {
         if (newBar) {
-            if (!use_threshold && Buy) {
-                closeAllTrade();
-                const string message = "Buy Signal for " + _Symbol;
-                SendNotification(message);
-                BuyAtMarket();
-                return;
-            } else if (buy_confidence >= buy_threshold) {
-                closeAllTrade();
-                const string message = "Buy Signal for " + _Symbol;
-                SendNotification(message);
-                BuyAtMarket();
-            }
-
-            if (!use_threshold && Sell) {
-                closeAllTrade();
-                const string message = "Sell Signal for " + _Symbol;
-                SendNotification(message);
-                SellAtMarket();
-                return;
-            } else if (sell_confidence >= sell_threshold) {
-                // printf("Sell");
-                closeAllTrade();
-                // drawVerticalLine("Sell", candle[1].time, clrRed);
-                const string message = "Sell Signal for " + _Symbol;
-                SendNotification(message);
-                SellAtMarket();
+            if (!use_threshold) {
+                trade(Buy, Sell);
+            } else {
+                thresholdTrade(buy_confidence, sell_confidence, buy_threshold, sell_threshold);
             }
         }
     }
@@ -496,6 +475,11 @@ void OnTick() {
     ArrayFree(second_ema_buffer);
     ArrayFree(third_ema_buffer);
     ArrayFree(rsi_buffer);
+    ArrayFree(macd_main_buffer);
+    ArrayFree(macd_signal_buffer);
+    ArrayFree(adx_buffer);
+    ArrayFree(DI_plusBuffer);
+    ArrayFree(DI_minusBuffer);
 
     if (percent_change > 0 && !CheckForOpenTrade()) {
         // printf("No open trades");
@@ -532,6 +516,50 @@ bool isNewBar() {
     return false;
 }
 
+// Buy trade without threshold
+void trade(bool buy, bool sell) {
+    if (buy) {
+        closeAllTrade();
+        BuyAtMarket();
+    } else if (sell) {
+        closeAllTrade();
+        SellAtMarket();
+    }
+}
+
+void thresholdTrade(double buy_confidence, double sell_confidence, double buy_threshold, double sell_threshold) {
+    // Debug logging: print current confidence levels
+    Print("Buy Confidence: ", buy_confidence, " Sell Confidence: ", sell_confidence);
+    
+    // Check if neither signal meets its threshold
+    if (buy_confidence < buy_threshold && sell_confidence < sell_threshold) {
+        Print("No sufficient confidence to execute trade.");
+        return;
+    }
+    
+    // If both signals exceed their thresholds, check if the difference is significant
+    if (buy_confidence >= buy_threshold && sell_confidence >= sell_threshold) {
+        double diff = MathAbs(buy_confidence - sell_confidence);
+        const double minDiff = 0.05; // Minimum difference required to trigger a trade, adjust as needed
+        if (diff < minDiff) {
+            Print("Confidence levels are too close (diff = ", diff, "); holding position.");
+            return;
+        }
+    }
+    
+    // Execute trade based on which signal is stronger
+    if (buy_confidence > sell_confidence && buy_confidence >= buy_threshold) {
+        Print("Buy confidence is higher and exceeds the threshold. Executing Buy...");
+        closeAllTrade();  // Ensure no conflicting trades are open
+        BuyAtMarket("High confidence buy");
+    } else if (sell_confidence > buy_confidence && sell_confidence >= sell_threshold) {
+        Print("Sell confidence is higher and exceeds the threshold. Executing Sell...");
+        closeAllTrade();  // Ensure no conflicting trades are open
+        SellAtMarket("High confidence sell");
+    }
+}
+
+
 //+------------------------------------------------------------------+
 //| FUNCTIONS TO ASSIST IN THE VISUALIZATION OF THE STRATEGY         |
 //+------------------------------------------------------------------+
@@ -560,6 +588,8 @@ void BuyAtMarket(string comments = "") {
 
     } else {
         // Print("Order Buy Executed successfully!");
+        const string message = "Buy Signal for " + _Symbol;
+        SendNotification(message);
     }
 }
 
@@ -578,6 +608,8 @@ void SellAtMarket(string comments = "") {
         Print("Bid: ", tick.bid, " SL: ", sl, " TP: ", tp);
     } else {
         // Print(("Order Sell Executed successfully!"));
+        const string message = "Sell Signal for " + _Symbol;
+        SendNotification(message);
     }
 }
 
@@ -594,10 +626,9 @@ bool CheckForOpenTrade() {
 }
 
 void CheckPercentChange() {
-    double current_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double last_price = last_close_position.price;
 
-    double change = ((current_price - last_price) / last_price) * 100;
+    double change = ((SymbolInfoDouble(_Symbol, SYMBOL_BID) - last_price) / last_price) * 100;
 
     if (MathAbs(change) > percent_change) {
         closeAllTrade();
@@ -878,9 +909,17 @@ double OnTester() {
     } else if (test_criterion == BIG_TRADES) {
         score = big_trades();
     } else if (test_criterion == BALANCE_DRAWDOWN) {
-        score = -TesterStatistics(STAT_BALANCEDD_PERCENT);
+        double profit = TesterStatistics(STAT_PROFIT);
+        // Profit*1-BalanceDDrel
+        if (profit >= 0) {
+            score = TesterStatistics(STAT_PROFIT) * (100 - TesterStatistics(STAT_BALANCE_DDREL_PERCENT) / 100);
+        } else {
+            score = TesterStatistics(STAT_PROFIT) * (100 + TesterStatistics(STAT_BALANCE_DDREL_PERCENT) / 100);
+        }
     } else if (test_criterion == HIGH_GROWTH) {
         score = highGrowth();
+    } else if (test_criterion == PROFIT_MINUS_LOSS) {
+        score = profit_minus_loss();
     } else if (test_criterion == NONE) {
         score = none();
     }
@@ -890,6 +929,16 @@ double OnTester() {
 
 double sign(const double x) {
     return x > 0 ? +1 : (x < 0 ? -1 : 0);
+}
+
+double profit_minus_loss() {
+    double total_profit = TesterStatistics(STAT_PROFIT);             // Total profit from all winning trades
+    double total_loss = MathAbs(TesterStatistics(STAT_GROSS_LOSS));  // Total loss (convert to positive)
+
+    // Score: prioritize high profits and low losses
+    double score = total_profit - total_loss;
+
+    return score;  // Higher score means better combination
 }
 
 double highGrowth() {
