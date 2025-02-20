@@ -101,9 +101,9 @@ double GetRootMeanSquareErrorOnBalanceCurve() {
 //| It returns a fitness score where a lower RMSE (penalizing only     |
 //| losses) gives a higher score.                                      |
 //+------------------------------------------------------------------+
-double OnTester() {
-   double rmse = GetRootMeanSquareErrorOnBalanceCurve();
-   // Invert the RMSE (adding a small constant to avoid division by zero)
-   double fitness = 1.0 / (rmse + 0.0001);
-   return fitness;
-}
+// double OnTester() {
+//    double rmse = GetRootMeanSquareErrorOnBalanceCurve();
+//    // Invert the RMSE (adding a small constant to avoid division by zero)
+//    double fitness = 1.0 / (rmse + 0.0001);
+//    return fitness;
+// }

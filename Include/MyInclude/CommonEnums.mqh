@@ -1,0 +1,55 @@
+#ifndef COMMON_ENUMS_MQH
+#define COMMON_ENUMS_MQH
+
+enum MA {
+    NO_MA,
+    SINGLE_MA,
+    DOUBLE_MA,
+    TRIPLE_MA,
+};
+
+enum RSI {
+    NO_RSI,
+    LIMIT,
+    COMPARISON,
+};
+
+enum MACD {
+    NO_MACD,
+    SIGNAL,
+    HIST,
+};
+
+enum ADX {
+    NO_ADX,
+    USE_ADX,
+};
+
+enum RISK_MANAGEMENT {
+    OPTIMIZED,
+    FIXED_PERCENTAGE,
+};
+
+enum TEST_CRITERION {
+    MAXIMUM_FAVORABLE_EXCURSION,
+    MEAN_ABSOLUTE_ERROR,
+    ROOT_MEAN_SQUARED_ERROR,
+    R_SQUARED,
+    WIN_RATE,
+    CUSTOMIZED_MAX,
+    SMALL_TRADES,
+    BIG_TRADES,
+    BALANCE_DRAWDOWN,
+    BALANCExRECOVERYxSHARPE,
+    HIGH_GROWTH,
+    PROFIT_MINUS_LOSS,
+    PROFIT_WITH_TIEBREAKER,
+    NONE,
+};
+
+enum TICKER {
+    BTCUSD,
+    XAUUSD
+};
+
+#endif  // COMMON_ENUMS_MQH
