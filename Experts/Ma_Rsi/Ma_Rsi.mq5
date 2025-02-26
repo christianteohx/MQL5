@@ -38,9 +38,10 @@ input int macd_fast = 12;   // MACD Fast
 input int macd_slow = 26;   // MACD Slow
 input int macd_period = 9;  // MACD Period
 
-sinput string s4;           //-----------------ADX-----------------
-input int adx_period = 14;  // ADX period
-input int adx_diff = 20;    // ADX difference
+sinput string s4;              //-----------------ADX-----------------
+input int adx_period = 14;     // ADX period
+input int adx_diff = 20;       // ADX difference
+input int adx_threshold = 25;  // ADX threshold
 
 sinput string s5;                   //-----------------Risk Management-----------------
 input bool use_threshold = true;    // Use threshold
@@ -106,12 +107,6 @@ closePosition last_close_position;
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
-    if (ticker == BTCUSD) {
-    } else if (ticker == XAUUSD) {
-        // points = 1;
-        // contract_size = 0.1;
-    }
-
     Print("Points: ", points);
     Print("Contract Size: ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE));
     Print("Decimal: ", decimal);
@@ -167,9 +162,11 @@ int OnInit() {
     adx_handle = iADX(_Symbol, _Period, adx_period);
 
     // Check if the EMA was created successfully
-    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE) {
+    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE ||
+        third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE ||
+        macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
-        return -1;
+        return INIT_FAILED;
     }
 
     // Check active indicators and sum their weights
@@ -254,21 +251,27 @@ void OnTick() {
         return;
     }
 
-    CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer);
-    CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer);
-    CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer);
-    CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer);
-    CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer);    // MACD Main Line
-    CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer);  // Signal Line
-    CopyBuffer(adx_handle, 0, 0, 4, adx_buffer);           // ADX
-    CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer);        // DI+
-    CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer);       // DI-
+    if (CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer) < 4 ||
+        CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer) < 4 ||
+        CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer) < 4 ||
+        CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer) < 4 ||
+        CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer) < 4 ||
+        CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer) < 4 ||
+        CopyBuffer(adx_handle, 0, 0, 4, adx_buffer) < 4 ||
+        CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer) < 4 ||
+        CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer) < 4) {
+        Print("Failed to copy indicator data - error: ", GetLastError());
+        return;
+    }
 
-    // Feed candle buffers with data
-    CopyRates(_Symbol, _Period, 0, 4, candle);
+    // Copy candle data
+    if (CopyRates(_Symbol, _Period, 0, 4, candle) < 4) {
+        Print("Failed to copy rates - error: ", GetLastError());
+        return;
+    }
+
+    // Set arrays as time series
     ArraySetAsSeries(candle, true);
-
-    // Sort the data vector
     ArraySetAsSeries(first_ema_buffer, true);
     ArraySetAsSeries(second_ema_buffer, true);
     ArraySetAsSeries(third_ema_buffer, true);
@@ -279,52 +282,24 @@ void OnTick() {
     ArraySetAsSeries(DI_plusBuffer, true);
     ArraySetAsSeries(DI_minusBuffer, true);
 
-    SymbolInfoTick(_Symbol, tick);
+    // Get current tick data
+    if (!SymbolInfoTick(_Symbol, tick)) {
+        Print("Failed to get tick data - error: ", GetLastError());
+        return;
+    }
 
-    double buy_confidence = 0.0;
-    double sell_confidence = 0.0;
-    double confidenceMA = 0.0;
-    double confidenceRSI = 0.0;
-    double confidenceMACD = 0.0;
-    double confidenceADX = 0.0;
+    // Initialize confidence variables
+    double buy_confidence = 0.0, sell_confidence = 0.0;
+    double confidenceMA = 0.0, confidenceRSI = 0.0, confidenceMACD = 0.0, confidenceADX = 0.0;
 
+    // MA Strategy Logic
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
-    bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
-    bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
-    bool buy_rsi = true;
-    bool buy_macd = true;
-    bool buy_adx = true;
-
     bool sell_single_ma = candle[1].open > first_ema_buffer[1] && candle[1].close < first_ema_buffer[1];
+    bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
     bool sell_ma_cross = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
+    bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
-    bool sell_rsi = true;
-    bool sell_macd = true;
-    bool sell_adx = true;
-
-    if (rsi_strategy == COMPARISON) {
-        buy_rsi = rsi_buffer[0] > rsi_buffer[1];
-        sell_rsi = rsi_buffer[0] < rsi_buffer[1];
-    } else if (rsi_strategy == LIMIT) {
-        buy_rsi = rsi_buffer[0] < rsi_oversold;
-        sell_rsi = rsi_buffer[0] > rsi_overbought;
-    }
-
-    if (macd_strategy == SIGNAL) {
-        buy_macd = macd_main_buffer[0] > macd_signal_buffer[0] && macd_main_buffer[2] < macd_signal_buffer[2];
-        sell_macd = macd_main_buffer[0] < macd_signal_buffer[0] && macd_main_buffer[2] > macd_signal_buffer[2];
-    } else if (macd_strategy == HIST) {
-        buy_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) > 0;
-        sell_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) < 0;
-    }
-
-    if (adx_strategy == USE_ADX) {
-        buy_adx = (DI_plusBuffer[0] - DI_minusBuffer[0]) > adx_diff;
-        sell_adx = (DI_minusBuffer[0] - DI_plusBuffer[0]) > adx_diff;
-    }
-
-    bool Buy = true;
-    bool Sell = true;
+    bool Buy = false, Sell = false;
 
     if (ma_strategy == SINGLE_MA) {
         Buy = buy_single_ma;
@@ -338,83 +313,101 @@ void OnTick() {
         Buy = buy_ma_cross && buy_triple_ma;
         Sell = sell_ma_cross && sell_triple_ma;
         confidenceMA = (buy_ma_cross && buy_triple_ma) ? 1.0 : ((sell_ma_cross && sell_triple_ma) ? -1.0 : 0.0);
+    }
 
-        // if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
-        //     Buy = true;
-        // } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
-        //     Sell = true;
-        // }
+    // RSI Strategy Logic (with gradient confidence)
+    bool buy_rsi = false, sell_rsi = false;
+    if (rsi_strategy == COMPARISON) {
+        buy_rsi = rsi_buffer[0] > rsi_buffer[1];
+        sell_rsi = rsi_buffer[0] < rsi_buffer[1];
+        confidenceRSI = buy_rsi ? 1.0 : (sell_rsi ? -1.0 : 0.0);
+    } else if (rsi_strategy == LIMIT) {
+        if (rsi_buffer[0] < rsi_oversold) {
+            buy_rsi = true;
+            confidenceRSI = 1.0;
+        } else if (rsi_buffer[0] > rsi_overbought) {
+            sell_rsi = true;
+            confidenceRSI = -1.0;
+        } else {
+            // Gradient confidence between oversold and overbought
+            confidenceRSI = (rsi_oversold - rsi_buffer[0]) / (rsi_oversold - rsi_overbought);
+        }
     }
 
     if (rsi_strategy != NO_RSI) {
         Buy = Buy && buy_rsi;
         Sell = Sell && sell_rsi;
-        confidenceRSI = buy_rsi ? 1.0 : (sell_rsi ? -1.0 : 0.0);
+    }
+
+    // MACD Strategy Logic
+    bool buy_macd = false, sell_macd = false;
+    if (macd_strategy == SIGNAL) {
+        buy_macd = macd_main_buffer[0] > macd_signal_buffer[0] && macd_main_buffer[2] < macd_signal_buffer[2];
+        sell_macd = macd_main_buffer[0] < macd_signal_buffer[0] && macd_main_buffer[2] > macd_signal_buffer[2];
+        confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
+    } else if (macd_strategy == HIST) {
+        double hist = macd_main_buffer[0] - macd_signal_buffer[0];
+        buy_macd = hist > 0;
+        sell_macd = hist < 0;
+        confidenceMACD = MathMin(1.0, MathMax(-1.0, hist * 10000));  // Scale based on histogram size
     }
 
     if (macd_strategy != NO_MACD) {
         Buy = Buy && buy_macd;
         Sell = Sell && sell_macd;
-        confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
+    }
+
+    // ADX Strategy Logic (with trend strength)
+    bool buy_adx = false, sell_adx = false;
+    if (adx_strategy == USE_ADX) {
+        double di_diff = DI_plusBuffer[0] - DI_minusBuffer[0];
+        buy_adx = di_diff > adx_diff && adx_buffer[0] > adx_threshold;
+        sell_adx = -di_diff > adx_diff && adx_buffer[0] > adx_threshold;
+        confidenceADX = buy_adx ? 1.0 : (sell_adx ? -1.0 : 0.0);
     }
 
     if (adx_strategy != NO_ADX) {
         Buy = Buy && buy_adx;
         Sell = Sell && sell_adx;
-        confidenceADX = buy_adx ? 1.0 : (sell_adx ? -1.0 : 0.0);
     }
 
+    // Calculate weighted confidence
     if (ma_strategy != NO_MA) {
         buy_confidence += confidenceMA * normalizedWeightMa;
         sell_confidence += -confidenceMA * normalizedWeightMa;
     }
-
     if (rsi_strategy != NO_RSI) {
         buy_confidence += confidenceRSI * normalizedWeightRsi;
         sell_confidence += -confidenceRSI * normalizedWeightRsi;
     }
-
     if (macd_strategy != NO_MACD) {
         buy_confidence += confidenceMACD * normalizedWeightMacd;
         sell_confidence += -confidenceMACD * normalizedWeightMacd;
     }
-
     if (adx_strategy != NO_ADX) {
         buy_confidence += confidenceADX * normalizedWeightAdx;
         sell_confidence += -confidenceADX * normalizedWeightAdx;
     }
 
-    // Ensure confidence is within [0,1]
+    // Normalize confidence to [0, 1]
     buy_confidence = MathMax(0.0, MathMin(1.0, buy_confidence));
     sell_confidence = MathMax(0.0, MathMin(1.0, sell_confidence));
 
+    // Trading logic
     bool newBar = isNewBar();
-    bool tradeTime = IsTradingTime();
+    bool tradeTime = IsTradingTime();  // Remove override unless intentional
+    // For testing, you could add: input bool alwaysTrade = false; then use tradeTime = tradeTime || alwaysTrade;
 
-    tradeTime = true;
-
-    if (tradeTime) {
-        if (newBar) {
-            if (!use_threshold) {
-                trade(Buy, Sell);
-            } else {
-                thresholdTrade(buy_confidence, sell_confidence, buy_threshold, sell_threshold);
-            }
+    if (tradeTime && newBar) {
+        if (!use_threshold) {
+            trade(Buy, Sell);
+        } else {
+            thresholdTrade(buy_confidence, sell_confidence, buy_threshold, sell_threshold);
         }
     }
 
-    ArrayFree(first_ema_buffer);
-    ArrayFree(second_ema_buffer);
-    ArrayFree(third_ema_buffer);
-    ArrayFree(rsi_buffer);
-    ArrayFree(macd_main_buffer);
-    ArrayFree(macd_signal_buffer);
-    ArrayFree(adx_buffer);
-    ArrayFree(DI_plusBuffer);
-    ArrayFree(DI_minusBuffer);
-
+    // Risk management
     if (percent_change > 0 && !CheckForOpenTrade()) {
-        // printf("No open trades");
         CheckPercentChange();
     }
 
@@ -423,6 +416,7 @@ void OnTick() {
     }
 
     if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
+        Print("Balance below minimum threshold. Removing EA.");
         ExpertRemove();
     }
 }
@@ -437,7 +431,10 @@ double OnTester() {
     } else if (test_criterion == MEAN_ABSOLUTE_ERROR) {
         score = GetMeanAbsoluteErrorOnBalanceCurve();
     } else if (test_criterion == ROOT_MEAN_SQUARED_ERROR) {
-        score = GetRootMeanSquareErrorOnBalanceCurve();
+        double rmse = GetRootMeanSquareErrorOnBalanceCurve(TP);
+        double offset = TesterStatistics(STAT_INITIAL_DEPOSIT) * 0.001;  // 0.1% of initial deposit
+        double fitness = 1.0 / (rmse + offset);
+        score = fitness;
     } else if (test_criterion == R_SQUARED) {
         score = GetR2onBalanceCurve();
     } else if (test_criterion == CUSTOMIZED_MAX) {
@@ -453,18 +450,16 @@ double OnTester() {
         }
     } else if (test_criterion == BALANCE_DRAWDOWN) {
         double profit = TesterStatistics(STAT_PROFIT);
-        // Profit*1-BalanceDDrel
-        if (profit >= 0) {
-            score = TesterStatistics(STAT_PROFIT) * (100 - TesterStatistics(STAT_BALANCE_DDREL_PERCENT) / 100);
-        } else {
-            score = TesterStatistics(STAT_PROFIT) * (100 + TesterStatistics(STAT_BALANCE_DDREL_PERCENT) / 100);
-        }
+        double dd = TesterStatistics(STAT_BALANCE_DDREL_PERCENT) / 100.0;
+        score = profit * (1.0 - dd);  // Penalize drawdown consistently
     } else if (test_criterion == HIGH_GROWTH) {
         score = highGrowth();
     } else if (test_criterion == PROFIT_MINUS_LOSS) {
         score = profit_minus_loss();
     } else if (test_criterion == PROFIT_WITH_TIEBREAKER) {
         score = profit_with_tiebreaker();
+    } else if (GROWTH_WITH_DRAWDOWN_PENALTY) {
+        score = GrowthWithDrawdownPenalty();
     } else if (test_criterion == NONE) {
         score = none();
     }
