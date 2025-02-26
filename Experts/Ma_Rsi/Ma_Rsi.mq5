@@ -11,63 +11,9 @@
 #include <Trade/AccountInfo.mqh>
 #include <Trade/Trade.mqh>
 
-sinput string s0;  //-----------------Strategy-----------------
-input TICKER ticker = BTCUSD;
-input MA ma_strategy = TRIPLE_MA;
-input double weightMA = 0.4;  // Weight for MA strategy
-input RSI rsi_strategy = LIMIT;
-input double weightRSI = 0.3;  // Weight for RSI strategy
-input MACD macd_strategy = HIST;
-input double weightMACD = 0.2;  // Weight for MACD strategy
-input ADX adx_strategy = USE_ADX;
-input double weightADX = 0.1;  // Weight for ADX strategy
-input RISK_MANAGEMENT risk_management = OPTIMIZED;
-
-sinput string s1;                  //-----------------Moving Average-----------------
-input int first_ema_period = 13;   // first EMA period
-input int second_ema_period = 48;  // second EMA period
-input int third_ema_period = 200;  // third EMA period
-
-sinput string s2;               //-----------------RSI-----------------
-input int rsi_period = 14;      // RSI period
-input int rsi_overbought = 70;  // RSI overbought level
-input int rsi_oversold = 30;    // RSI oversold level
-
-sinput string s3;           //-----------------MACD-----------------
-input int macd_fast = 12;   // MACD Fast
-input int macd_slow = 26;   // MACD Slow
-input int macd_period = 9;  // MACD Period
-
-sinput string s4;              //-----------------ADX-----------------
-input int adx_period = 14;     // ADX period
-input int adx_diff = 20;       // ADX difference
-input int adx_threshold = 25;  // ADX threshold
-
-sinput string s5;                   //-----------------Risk Management-----------------
-input bool use_threshold = true;    // Use threshold
-input double buy_threshold = 0.5;   // Buy Threshold
-input double sell_threshold = 0.5;  // Sell Threshold
-input double SL = 10;               // Stop Loss
-input double TP = 10;               // Take Profit
-input int percent_change = 5;       // Percent Change before re-buying
-input bool trailing_sl = true;      // Trailing Stop Loss
-input int max_risk = 10;            // Maximum risk (%) per trade
-input double decrease_factor = 3;   // Descrease factor
-input bool boost = false;           // Use high risk until target reached
-input double boost_target = 5000;   // Boost target
-
-sinput string s6;                                 //-----------------Test-----------------
-input TEST_CRITERION test_criterion = R_SQUARED;  // Test criterion
-
 //+------------------------------------------------------------------+
-//| Variable for indicators                                          |
+//| Global Variables                                                 |
 //+------------------------------------------------------------------+
-double totalWeight = 0.0;
-double normalizedWeightMa = 0.0;    // Normalized weight for MA
-double normalizedWeightRsi = 0.0;   // Normalized weight for RSI
-double normalizedWeightMacd = 0.0;  // Normalized weight for MACD
-double normalizedWeightAdx = 0.0;   // Normalized weight for ADX
-
 int first_ema_handle;       // Handle First EMA
 double first_ema_buffer[];  // Buffer First EMA
 
@@ -89,19 +35,88 @@ double adx_buffer[];      // ADX Main Buffer
 double DI_plusBuffer[];   // ADX Plus Buffer
 double DI_minusBuffer[];  // ADX Minus Buffer
 
-//+------------------------------------------------------------------+
-//| Variable for functions                                           |
-//+------------------------------------------------------------------+
+int atr_handle;       // Handle ATR
+double atr_buffer[];  // Buffer ATR
+
 int magic_number = 50357114;  // Magic number
 double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
 double points = 1 / contract_size;                        // Point
 int decimal = SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);  // Decimal
+
+double totalWeight = 0.0;           // Total weight for all indicators
+double normalizedWeightMa = 0.0;    // Normalized weight for MA
+double normalizedWeightRsi = 0.0;   // Normalized weight for RSI
+double normalizedWeightMacd = 0.0;  // Normalized weight for MACD
+double normalizedWeightAdx = 0.0;   // Normalized weight for ADX
+double normalizedWeightAtr = 0.0;   // Normalized weight for ATR
+
+double current_atr;
 
 MqlRates candle[];  // Variable for storing candles
 MqlTick tick;       // Variable for storing ticks
 
 CTrade ExtTrade;
 closePosition last_close_position;
+
+//+------------------------------------------------------------------+
+//| Input Parameters (keep all inputs here)                          |
+//+------------------------------------------------------------------+
+sinput string s0;  //-----------------Strategy-----------------
+input TICKER ticker = BTCUSD;
+input MA ma_strategy = TRIPLE_MA;
+input double weightMA = 0.4;  // Weight for MA strategy
+input RSI rsi_strategy = LIMIT;
+input double weightRSI = 0.3;  // Weight for RSI strategy
+input MACD macd_strategy = HIST;
+input double weightMACD = 0.2;  // Weight for MACD strategy
+input ADX adx_strategy = USE_ADX;
+input double weightADX = 0.1;  // Weight for ADX strategy
+input ATR atr_strategy = USE_ATR;
+input double weightATR = 0.1;  // Weight for ATR strategy
+input RISK_MANAGEMENT risk_management = OPTIMIZED;
+
+sinput string moving_average;      //-----------------Moving Average-----------------
+input int first_ema_period = 13;   // first EMA period
+input int second_ema_period = 48;  // second EMA period
+input int third_ema_period = 200;  // third EMA period
+
+sinput string rsi;              //-----------------RSI-----------------
+input int rsi_period = 14;      // RSI period
+input int rsi_overbought = 70;  // RSI overbought level
+input int rsi_oversold = 30;    // RSI oversold level
+
+sinput string macd;         //-----------------MACD-----------------
+input int macd_fast = 12;   // MACD Fast
+input int macd_slow = 26;   // MACD Slow
+input int macd_period = 9;  // MACD Period
+
+sinput string adx;             //-----------------ADX-----------------
+input int adx_period = 14;     // ADX period
+input int adx_diff = 20;       // ADX difference
+input int adx_threshold = 25;  // ADX threshold
+
+sinput string atr;                     //-----------------ATR-----------------
+input int atr_period = 14;             // ATR period for volatility measurement
+input double atr_sl_multiplier = 2.0;  // Multiplier for Stop Loss based on ATR
+input double atr_tp_multiplier = 3.0;  // Multiplier for Take Profit based on ATR
+input double min_volatility = 0.5;     // Minimum volatility threshold (in ATR points) to trade
+input double max_volatility = 5.0;     // Maximum volatility threshold (in ATR points) to pause trading
+
+sinput string risk;                 //-----------------Risk Management-----------------
+input bool use_threshold = true;    // Use threshold
+input double buy_threshold = 0.5;   // Buy Threshold
+input double sell_threshold = 0.5;  // Sell Threshold
+input double SL = 10;               // Stop Loss (fixed, but overridden by ATR)
+input double TP = 10;               // Take Profit (fixed, but overridden by ATR)
+input int percent_change = 5;       // Percent Change before re-buying
+input bool trailing_sl = true;      // Trailing Stop Loss
+input int max_risk = 10;            // Maximum risk (%) per trade
+input double decrease_factor = 3;   // Decrease factor
+input bool boost = false;           // Use high risk until target reached
+input double boost_target = 5000;   // Boost target
+
+sinput string test;                                            //-----------------Test-----------------
+input TEST_CRITERION test_criterion = MONTE_CARLO_ROBUSTNESS;  // Test criterion
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -149,6 +164,13 @@ int OnInit() {
         }
     }
 
+    if (atr_strategy != NO_ATR) {
+        if (atr_period < 1) {
+            Alert("Invalid ATR period");
+            return -1;
+        }
+    }
+
     ExtTrade.SetExpertMagicNumber(magic_number);
     ExtTrade.SetDeviationInPoints(10);
     ExtTrade.SetTypeFilling(ORDER_FILLING_FOK);
@@ -160,11 +182,13 @@ int OnInit() {
     rsi_handle = iRSI(_Symbol, _Period, rsi_period, PRICE_CLOSE);
     macd_handle = iMACD(_Symbol, _Period, macd_fast, macd_slow, macd_period, PRICE_CLOSE);
     adx_handle = iADX(_Symbol, _Period, adx_period);
+    atr_handle = iATR(_Symbol, _Period, atr_period);
 
-    // Check if the EMA was created successfully
+    // Check if the indicators were created successfully
     if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE ||
         third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE ||
-        macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE) {
+        macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE ||
+        atr_handle == INVALID_HANDLE) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
         return INIT_FAILED;
     }
@@ -186,7 +210,11 @@ int OnInit() {
         totalWeight += weightADX;
     }
 
-    // normalize weights for active indicators
+    if (atr_strategy != NO_ATR) {
+        totalWeight += weightATR;  // Include ATR weight if used
+    }
+
+    // Normalize weights for active indicators
     if (ma_strategy != NO_MA) {
         normalizedWeightMa = weightMA / totalWeight;
     }
@@ -203,6 +231,10 @@ int OnInit() {
         normalizedWeightAdx = weightADX / totalWeight;
     }
 
+    if (atr_strategy != NO_ATR) {
+        normalizedWeightAtr = weightATR / totalWeight;  // Add normalized weight for ATR
+    }
+
     last_close_position.buySell = NULL;
     last_close_position.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
@@ -215,19 +247,11 @@ int OnInit() {
     ChartIndicatorAdd(0, 1, rsi_handle);
     ChartIndicatorAdd(0, 2, macd_handle);
     ChartIndicatorAdd(0, 3, adx_handle);
-
-    SetIndexBuffer(0, first_ema_buffer, INDICATOR_DATA);
-    SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
-    SetIndexBuffer(2, third_ema_buffer, INDICATOR_DATA);
-    SetIndexBuffer(3, rsi_buffer, INDICATOR_DATA);
-    SetIndexBuffer(4, macd_main_buffer, INDICATOR_DATA);
-    SetIndexBuffer(5, macd_signal_buffer, INDICATOR_DATA);
-    SetIndexBuffer(6, adx_buffer, INDICATOR_DATA);
-    SetIndexBuffer(7, DI_plusBuffer, INDICATOR_DATA);
-    SetIndexBuffer(8, DI_minusBuffer, INDICATOR_DATA);
+    ChartIndicatorAdd(0, 4, atr_handle);  // Add ATR to chart for visualization
 
     return (INIT_SUCCEEDED);
 }
+
 //+------------------------------------------------------------------+
 //| Expert deinitialization function                                 |
 //+------------------------------------------------------------------+
@@ -240,6 +264,7 @@ void OnDeinit(const int reason) {
     IndicatorRelease(rsi_handle);
     IndicatorRelease(macd_handle);
     IndicatorRelease(adx_handle);
+    IndicatorRelease(atr_handle);
 }
 
 //+------------------------------------------------------------------+
@@ -259,7 +284,8 @@ void OnTick() {
         CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer) < 4 ||
         CopyBuffer(adx_handle, 0, 0, 4, adx_buffer) < 4 ||
         CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer) < 4 ||
-        CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer) < 4) {
+        CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer) < 4 ||
+        CopyBuffer(atr_handle, 0, 0, 4, atr_buffer) < 4) {
         Print("Failed to copy indicator data - error: ", GetLastError());
         return;
     }
@@ -281,6 +307,7 @@ void OnTick() {
     ArraySetAsSeries(adx_buffer, true);
     ArraySetAsSeries(DI_plusBuffer, true);
     ArraySetAsSeries(DI_minusBuffer, true);
+    ArraySetAsSeries(atr_buffer, true);
 
     // Get current tick data
     if (!SymbolInfoTick(_Symbol, tick)) {
@@ -290,7 +317,7 @@ void OnTick() {
 
     // Initialize confidence variables
     double buy_confidence = 0.0, sell_confidence = 0.0;
-    double confidenceMA = 0.0, confidenceRSI = 0.0, confidenceMACD = 0.0, confidenceADX = 0.0;
+    double confidenceMA = 0.0, confidenceRSI = 0.0, confidenceMACD = 0.0, confidenceADX = 0.0, confidenceATR = 0.0;
 
     // MA Strategy Logic
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
@@ -371,22 +398,29 @@ void OnTick() {
         Sell = Sell && sell_adx;
     }
 
-    // Calculate weighted confidence
-    if (ma_strategy != NO_MA) {
-        buy_confidence += confidenceMA * normalizedWeightMa;
-        sell_confidence += -confidenceMA * normalizedWeightMa;
-    }
-    if (rsi_strategy != NO_RSI) {
-        buy_confidence += confidenceRSI * normalizedWeightRsi;
-        sell_confidence += -confidenceRSI * normalizedWeightRsi;
-    }
-    if (macd_strategy != NO_MACD) {
-        buy_confidence += confidenceMACD * normalizedWeightMacd;
-        sell_confidence += -confidenceMACD * normalizedWeightMacd;
-    }
-    if (adx_strategy != NO_ADX) {
-        buy_confidence += confidenceADX * normalizedWeightAdx;
-        sell_confidence += -confidenceADX * normalizedWeightAdx;
+    double dynamic_sl;
+    double dynamic_tp;
+
+    // ATR Strategy Logic (optional, for confidence or filtering)
+    current_atr = atr_buffer[0];  // Current ATR value (scaled for better readability)
+    if (atr_strategy == USE_ATR) {
+        // Example: Use ATR for confidence (higher ATR reduces confidence in signals)
+        double volatility_confidence = MathMin(1.0, max_volatility / (current_atr / Point()));
+        confidenceATR = (Buy || Sell) ? volatility_confidence : 0.0;  // Positive confidence if trading, scaled by volatility
+        buy_confidence += confidenceATR * normalizedWeightAtr;
+        sell_confidence += -confidenceATR * normalizedWeightAtr;
+
+        // Check volatility thresholds to filter trades
+        if ((current_atr < min_volatility) || (current_atr > max_volatility)) {
+            Print("Volatility out of bounds (ATR = ", current_atr, "). Skipping trade.");
+            return;  // Skip trading in extremely low or high volatility
+        } else {
+            Print("Current ATR: ", current_atr, " (within bounds)");
+        }
+
+        // Dynamically adjust SL and TP based on ATR
+        dynamic_sl = current_atr * atr_sl_multiplier;  // e.g., 2 * ATR for Stop Loss
+        dynamic_tp = current_atr * atr_tp_multiplier;  // e.g., 3 * ATR for Take Profit
     }
 
     // Normalize confidence to [0, 1]
@@ -396,13 +430,12 @@ void OnTick() {
     // Trading logic
     bool newBar = isNewBar();
     bool tradeTime = IsTradingTime();  // Remove override unless intentional
-    // For testing, you could add: input bool alwaysTrade = false; then use tradeTime = tradeTime || alwaysTrade;
 
     if (tradeTime && newBar) {
         if (!use_threshold) {
-            trade(Buy, Sell);
+            trade(Buy, Sell, dynamic_sl, dynamic_tp);
         } else {
-            thresholdTrade(buy_confidence, sell_confidence, buy_threshold, sell_threshold);
+            thresholdTrade(buy_confidence, sell_confidence, buy_threshold, sell_threshold, dynamic_sl, dynamic_tp);
         }
     }
 
@@ -412,15 +445,24 @@ void OnTick() {
     }
 
     if (trailing_sl) {
-        updateSLTP();
+        updateSLTP(tick);
     }
 
+    // Balance check (clarified)
+    // double min_balance = 1000.0;  // Could be an input: input double minBalance = 1000.0;
+    // if (AccountInfoDouble(ACCOUNT_BALANCE) < min_balance) {
+    //     Print("Balance below minimum threshold (", min_balance, "). Removing EA.");
+    //     ExpertRemove();
+    // }
+
     if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
-        Print("Balance below minimum threshold. Removing EA.");
         ExpertRemove();
     }
 }
 
+//+------------------------------------------------------------------+
+//| Expert tester function                                           |
+//+------------------------------------------------------------------+
 double OnTester() {
     double score = 0.0;
 
@@ -458,8 +500,10 @@ double OnTester() {
         score = profit_minus_loss();
     } else if (test_criterion == PROFIT_WITH_TIEBREAKER) {
         score = profit_with_tiebreaker();
-    } else if (GROWTH_WITH_DRAWDOWN_PENALTY) {
+    } else if (test_criterion == GROWTH_WITH_DRAWDOWN_PENALTY) {  // Fixed syntax error
         score = GrowthWithDrawdownPenalty();
+    } else if (test_criterion == MONTE_CARLO_ROBUSTNESS) {
+        score = GetMonteCarloRobustness();
     } else if (test_criterion == NONE) {
         score = none();
     }

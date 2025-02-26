@@ -1,120 +1,147 @@
-#ifndef MYINCLUDE_TRADEMANAGEMENT_MQH
-#define MYINCLUDE_TRADEMANAGEMENT_MQH
+//+------------------------------------------------------------------+
+//|                                                    TradeManagement.mqh |
+//|                                  Copyright 2024, Your Name or Team |
+//|                                             https://www.mql5.com |
+//+------------------------------------------------------------------+
+#ifndef TRADEMANAGEMENT_MQH
+#define TRADEMANAGEMENT_MQH
 
 #include <MyInclude/CommonEnums.mqh>
+#include <Trade/AccountInfo.mqh>
 #include <Trade/Trade.mqh>
 
+// Structure to hold last closed position data (if needed)
 struct closePosition {
-    int buySell;
+    int buySell;  // 1 for buy, -1 for sell, 0 for none
     double price;
 };
 
-void trade(bool buy, bool sell) {
-    if (buy) {
-        closeAllTrade();
-        BuyAtMarket();
-    } else if (sell) {
-        closeAllTrade();
-        SellAtMarket();
-    }
-}
+//+------------------------------------------------------------------+
+//| Initialize ATR (call from Ma_Rsi.mq5 OnInit)                     |
+//+------------------------------------------------------------------+
+// void InitializeATR() {
+//     atr_handle = iATR(_Symbol, _Period, atr_period);
+//     if (atr_handle == INVALID_HANDLE) {
+//         Print("Error creating ATR handle - error: ", GetLastError());
+//         return;
+//     }
+// }
 
-void thresholdTrade(double buy_confidence, double sell_confidence, double buy_threshold, double sell_threshold) {
-    // Debug logging: print current confidence levels
-    Print("Buy Confidence: ", buy_confidence, " Sell Confidence: ", sell_confidence);
+//+------------------------------------------------------------------+
+//| Get Current ATR Value                                            |
+//+------------------------------------------------------------------+
+// double GetCurrentATR() {
+//     if (atr_handle == INVALID_HANDLE) {
+//         Print("ATR handle invalid, reinitializing...");
+//         InitializeATR();
+//         if (atr_handle == INVALID_HANDLE) {
+//             Print("Failed to reinitialize ATR handle. Using default ATR (0.0).");
+//             return 0.0;
+//         }
+//     }
 
-    // Check if neither signal meets its threshold
-    if (buy_confidence < buy_threshold && sell_confidence < sell_threshold) {
-        Print("No sufficient confidence to execute trade.");
-        return;
-    }
+//     if (CopyBuffer(atr_handle, 0, 0, 4, atr_buffer) < 4) {
+//         Print("Failed to copy ATR data - error: ", GetLastError());
+//         return 0.0;  // Return 0.0 as fallback, but log the issue
+//     }
+//     ArraySetAsSeries(atr_buffer, true);
+//     return atr_buffer[1];  // Most recent ATR value (index 1 for safety)
+// }
 
-    // If both signals exceed their thresholds, check if the difference is significant
-    if (buy_confidence >= buy_threshold && sell_confidence >= sell_threshold) {
-        double diff = MathAbs(buy_confidence - sell_confidence);
-        const double minDiff = 0.05;  // Minimum difference required to trigger a trade, adjust as needed
-        if (diff < minDiff) {
-            Print("Confidence levels are too close (diff = ", diff, "); holding position.");
-            return;
-        }
-    }
+//+------------------------------------------------------------------+
+//| Trade Execution Function with Dynamic SL/TP                      |
+//+------------------------------------------------------------------+
+void trade(bool Buy, bool Sell, double sl, double tp) {
+    // Check volatility before trading
+    // double current_atr = GetCurrentATR();
+    // if (current_atr <= 0.0 || current_atr < min_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT) ||
+    //     current_atr > max_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT)) {
+    //     Print("Volatility out of bounds or invalid (ATR = ", current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+    //           "). Skipping trade.");
+    //     return;
+    // }
+    printf("Trade function called with Buy=%d, Sell=%d, SL=%f, TP=%f", Buy, Sell, sl, tp);
+    if (Buy && PositionsTotal() == 0) {
+        // Calculate lot size using optimized volume
+        double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
 
-    // Execute trade based on which signal is stronger
-    if (buy_confidence > sell_confidence && buy_confidence >= buy_threshold) {
-        Print("Buy confidence is higher and exceeds the threshold. Executing Buy...");
-        closeAllTrade();  // Ensure no conflicting trades are open
-        BuyAtMarket("High confidence buy");
-    } else if (sell_confidence > buy_confidence && sell_confidence >= sell_threshold) {
-        Print("Sell confidence is higher and exceeds the threshold. Executing Sell...");
-        closeAllTrade();  // Ensure no conflicting trades are open
-        SellAtMarket("High confidence sell");
-    }
-}
-
-void BuyAtMarket(string comments = "") {
-    double sl = 0;
-    double tp = 0;
-
-    if (SL > 0)
-        sl = NormalizeDouble(tick.ask - (SL), decimal);
-    if (TP > 0)
-        tp = NormalizeDouble(tick.ask + (TP), decimal);
-
-    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp, comments)) {
-        Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
-              ". Code description: ", ExtTrade.ResultRetcodeDescription());
-        Print("Ask: ", tick.ask, " SL: ", sl, " TP: ", tp);
-
-    } else {
-        // Print("Order Buy Executed successfully!");
-        const string message = "Buy Signal for " + _Symbol;
-        SendNotification(message);
-    }
-}
-
-void SellAtMarket(string comments = "", double SL = 0, double TP = 0) {
-    double sl = 0;
-    double tp = 0;
-
-    if (SL > 0)
-        sl = NormalizeDouble(tick.bid + (SL), decimal);
-    if (TP > 0)
-        tp = NormalizeDouble(tick.bid - (TP), decimal);
-
-    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_SELL, getVolume(), tick.bid, sl, tp, comments)) {
-        Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
-              ". Code description: ", ExtTrade.ResultRetcodeDescription());
-        Print("Bid: ", tick.bid, " SL: ", sl, " TP: ", tp);
-    } else {
-        // Print(("Order Sell Executed successfully!"));
-        const string message = "Sell Signal for " + _Symbol;
-        SendNotification(message);
-    }
-}
-
-void closeAllTrade() {
-    int total = PositionsTotal();
-    for (int i = 0; i < total; i++) {
-        ulong ticket = PositionGetTicket(i);
-
-        if (!ExtTrade.PositionClose(ticket)) {
-            Print("Close trade failed. Return code=", ExtTrade.ResultRetcode(),
-                  ". Code description: ", ExtTrade.ResultRetcodeDescription());
+        // Place buy order with dynamic SL and TP (in points, converted to price)
+        if (ExtTrade.Buy(lotSize, _Symbol, price,
+                         sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                         tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), "Buy Order")) {
+            Print("Buy order executed successfully with SL=", sl, " TP=", tp);
         } else {
-            if (PositionGetDouble(POSITION_PROFIT) > 0) {
-                last_close_position.buySell = int(PositionGetInteger(POSITION_TYPE));
-                last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
-            }
-            // Print("Close position successfully!");
+            Print("Buy order failed - error: ", GetLastError());
+        }
+    }
+    else if (Sell && PositionsTotal() == 0) {
+        // Calculate lot size using optimized volume
+        double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+        // Place sell order with dynamic SL and TP (in points, converted to price)
+        if (ExtTrade.Sell(lotSize, _Symbol, price,
+                          sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                          tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), "Sell Order")) {
+            Print("Sell order executed successfully with SL=", sl, " TP=", tp);
+        } else {
+            Print("Sell order failed - error: ", GetLastError());
         }
     }
 }
 
-void updateSLTP() {
+//+------------------------------------------------------------------+
+//| Threshold-Based Trade Execution with Dynamic SL/TP               |
+//+------------------------------------------------------------------+
+void thresholdTrade(double buy_confidence, double sell_confidence, double buy_threshold, double sell_threshold, double sl, double tp) {
+    // Check volatility before trading
+    // double current_atr = GetCurrentATR();
+    // if (current_atr <= 0.0 || current_atr < min_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT) ||
+    //     current_atr > max_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT)) {
+    //     Print("Volatility out of bounds or invalid (ATR = ", current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+    //           "). Skipping trade.");
+    //     return;
+    // }
+
+    if (buy_confidence >= buy_threshold && PositionsTotal() == 0) {
+        // Calculate lot size using optimized volume
+        double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+        // Place buy order with dynamic SL and TP (in points, converted to price)
+        if (ExtTrade.Buy(lotSize, _Symbol, price,
+                         sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                         tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), "Threshold Buy Order")) {
+            Print("Threshold Buy order executed successfully with SL=", sl, " TP=", tp);
+        } else {
+            Print("Threshold Buy order failed - error: ", GetLastError());
+        }
+    } else if (sell_confidence >= sell_threshold && PositionsTotal() == 0) {
+        // Calculate lot size using optimized volume
+        double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+        double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+        // Place sell order with dynamic SL and TP (in points, converted to price)
+        if (ExtTrade.Sell(lotSize, _Symbol, price,
+                          sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                          tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), "Threshold Sell Order")) {
+            Print("Threshold Sell order executed successfully with SL=", sl, " TP=", tp);
+        } else {
+            Print("Threshold Sell order failed - error: ", GetLastError());
+        }
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Update Stop Loss and Take Profit with Dynamic SL/TP              |
+//+------------------------------------------------------------------+
+void updateSLTP(MqlTick &tick) {  // Pass tick as parameter to access bid/ask
     MqlTradeRequest request;
     MqlTradeResult response;
 
     int total = PositionsTotal();
+    // double current_atr = GetCurrentATR();
 
     for (int i = 0; i < total; i++) {
         //--- parameters of the order
@@ -131,12 +158,12 @@ void updateSLTP() {
             double take_profit = prev_take_profit;
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                if (trailing_sl && (stop_loss < tick.bid - (SL) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
+                if (trailing_sl && (stop_loss < tick.bid - (current_atr * atr_sl_multiplier) || stop_loss == 0)) {
+                    stop_loss = NormalizeDouble(tick.bid - (current_atr * atr_sl_multiplier), decimal);
                 }
 
                 if (TP > 0) {
-                    take_profit = NormalizeDouble(tick.bid + (TP), decimal);
+                    take_profit = NormalizeDouble(tick.bid + (current_atr * atr_tp_multiplier), decimal);
                 } else {
                     take_profit = NormalizeDouble(0, decimal);
                 }
@@ -151,15 +178,15 @@ void updateSLTP() {
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
                     Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
                 } else {
-                    // Print(("Order Update Stop Loss Buy Executed successfully!"));
+                    Print("Order Update Stop Loss Buy Executed successfully with SL=", stop_loss, " TP=", take_profit);
                 }
             } else {
-                if (trailing_sl && (stop_loss > tick.ask + (SL) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
+                if (trailing_sl && (stop_loss > tick.ask + (current_atr * atr_sl_multiplier) || stop_loss == 0)) {
+                    stop_loss = NormalizeDouble(tick.ask + (current_atr * atr_sl_multiplier), decimal);
                 }
 
                 if (TP > 0) {
-                    take_profit = NormalizeDouble(tick.ask - (TP), decimal);
+                    take_profit = NormalizeDouble(tick.ask - (current_atr * atr_tp_multiplier), decimal);
                 } else {
                     take_profit = NormalizeDouble(0, decimal);
                 }
@@ -174,13 +201,16 @@ void updateSLTP() {
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
                     Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
                 } else {
-                    // Print(("Order Update Stop Loss Sell Executed successfully!"));
+                    Print("Order Update Stop Loss Sell Executed successfully with SL=", stop_loss, " TP=", take_profit);
                 }
             }
         }
     }
 }
 
+//+------------------------------------------------------------------+
+//| Check for Open Trades                                            |
+//+------------------------------------------------------------------+
 bool CheckForOpenTrade() {
     int total = PositionsTotal();
 
@@ -193,8 +223,19 @@ bool CheckForOpenTrade() {
     return false;
 }
 
+//+------------------------------------------------------------------+
+//| Check Percent Change with Volatility Filter                      |
+//+------------------------------------------------------------------+
 void CheckPercentChange() {
     double last_price = last_close_position.price;
+
+    // Skip if volatility is out of bounds
+    if (current_atr < min_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT) ||
+        current_atr > max_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT)) {
+        Print("Volatility out of bounds (ATR = ", current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+              "). Skipping percent change check.");
+        return;
+    }
 
     double change = ((SymbolInfoDouble(_Symbol, SYMBOL_BID) - last_price) / last_price) * 100;
 
@@ -203,24 +244,32 @@ void CheckPercentChange() {
         if (last_close_position.buySell == NULL) {
             if (change > 0) {
                 printf("Buying after %.2f%% change", change);
-                BuyAtMarket("Continue buy");
+                BuyAtMarket("Continue buy", current_atr * atr_sl_multiplier, current_atr * atr_tp_multiplier);  // Use dynamic SL/TP
             } else {
                 printf("Selling after %.2f%% change", change);
-                SellAtMarket("Continue sell");
+                SellAtMarket("Continue sell", current_atr * atr_sl_multiplier, current_atr * atr_tp_multiplier);  // Use dynamic SL/TP
             }
-        }
-
-        if (last_close_position.buySell == POSITION_TYPE_BUY) {
+        } else if (last_close_position.buySell == POSITION_TYPE_BUY) {
             printf("Rebuying after %.2f%% change", change);
-            BuyAtMarket("Continue buy");
+            BuyAtMarket("Continue buy", current_atr * atr_sl_multiplier, current_atr * atr_tp_multiplier);  // Use dynamic SL/TP
         } else {
             printf("Reselling after %.2f%% change", change);
-            SellAtMarket("Continue sell");
+            SellAtMarket("Continue sell", current_atr * atr_sl_multiplier, current_atr * atr_tp_multiplier);  // Use dynamic SL/TP
         }
     }
 }
 
+//+------------------------------------------------------------------+
+//| Get Volume with Volatility Adjustment                            |
+//+------------------------------------------------------------------+
 int getVolume() {
+    if (current_atr < min_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT) ||
+        current_atr > max_volatility * SymbolInfoDouble(_Symbol, SYMBOL_POINT)) {
+        Print("Volatility out of bounds (ATR = ", current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+              "). Using default volume.");
+        return 1;  // Default to minimal volume in extreme volatility
+    }
+
     if (boost == true && boost_target > 0) {
         if (ACCOUNT_BALANCE < boost_target) {
             return boostVol();
@@ -238,11 +287,19 @@ int getVolume() {
     }
 }
 
+//+------------------------------------------------------------------+
+//| Fixed Percentage Volume with Volatility Scaling                  |
+//+------------------------------------------------------------------+
 int fixedPercentageVol() {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double contract_price = cur_price * (contract_size / 10) / 3.67;
     double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
     double risk = max_risk;
+
+    // Scale risk based on volatility (reduce risk in high volatility)
+    double volatility_factor = MathMin(1.0, current_atr / (atr_period * SymbolInfoDouble(_Symbol, SYMBOL_POINT)));  // 0-1 scale
+    risk *= (1.0 - volatility_factor * 0.5);                                                                        // Reduce risk by up to 50% in high volatility
+
     double volume = free_margin * (risk / 100) / contract_price;
 
     double min_vol = 0.01;
@@ -258,7 +315,7 @@ int fixedPercentageVol() {
 }
 
 //+------------------------------------------------------------------+
-//| Calculate optimal lot size                                       |
+//| Calculate Optimal Lot Size with Volatility Scaling               |
 //+------------------------------------------------------------------+
 int optimizedVol(void) {
     double price = 0.0;
@@ -274,9 +331,12 @@ int optimizedVol(void) {
     if (margin <= 0.0)
         return (0.0);
 
-    double volume = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * max_risk / margin, 2);
+    double volatility_factor = MathMin(1.0, current_atr / (atr_period * SymbolInfoDouble(_Symbol, SYMBOL_POINT)));  // 0-1 scale
+    double effective_max_risk = max_risk * (1.0 - volatility_factor * 0.5);                                         // Reduce risk by up to 50% in high volatility
 
-    //--- calculate number of losses orders without a break1
+    double volume = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * effective_max_risk / margin, 2);
+
+    //--- calculate number of losses orders without a break
     if (decrease_factor > 0) {
         //--- select history for access
         HistorySelect(0, TimeCurrent());
@@ -325,12 +385,13 @@ int optimizedVol(void) {
     if (volume > maxvol)
         volume = maxvol;
 
-    //--- return trading volume
-
-    Print("Optimized Volume: ", volume);
+    Print("Optimized Volume (Volatility Adjusted): ", volume);
     return (int)volume;
 }
 
+//+------------------------------------------------------------------+
+//| Boost Volume with Volatility Scaling                             |
+//+------------------------------------------------------------------+
 int boostVol(void) {
     double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double contract_price = cur_price * (contract_size / 10);
@@ -339,11 +400,14 @@ int boostVol(void) {
 
     int minRisk = 10;
 
+    double volatility_factor = MathMin(1.0, current_atr / (atr_period * SymbolInfoDouble(_Symbol, SYMBOL_POINT)));  // 0-1 scale
     double risk = MathMin(MathSqrt(MathPow(boost_target, 2) / MathPow(balance, 2)) * minRisk, 100);
+    risk *= (1.0 - volatility_factor * 0.5);  // Reduce risk by up to 50% in high volatility
+
     double volume = equity * (risk / 100) / contract_price;
 
-    printf("Risk: %.2f", risk);
-    printf("Volume: %.2f", volume);
+    printf("Risk (Volatility Adjusted): %.2f", risk);
+    printf("Volume (Volatility Adjusted): %.2f", volume);
 
     double min_vol = 1;
     double max_vol = 300;
@@ -354,9 +418,56 @@ int boostVol(void) {
         volume = max_vol;
     }
 
-    Print("Boost Volume: ", volume);
+    Print("Boost Volume (Volatility Adjusted): ", volume);
 
-    return int(volume);
+    return (int)volume;
 }
 
-#endif  // MYINCLUDE_TRADEMANAGEMENT_MQH
+//+------------------------------------------------------------------+
+//| Market Buy Order with Dynamic SL/TP                              |
+//+------------------------------------------------------------------+
+void BuyAtMarket(string comment, double sl, double tp) {
+    double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+
+    if (ExtTrade.Buy(lotSize, _Symbol, price,
+                     sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                     tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), comment)) {
+        Print("Market Buy executed successfully with SL=", sl, " TP=", tp);
+    } else {
+        Print("Market Buy failed - error: ", GetLastError());
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Market Sell Order with Dynamic SL/TP                             |
+//+------------------------------------------------------------------+
+void SellAtMarket(string comment, double sl, double tp) {
+    double lotSize = getVolume() / 10.0;  // Adjust based on your volume function output
+    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+    if (ExtTrade.Sell(lotSize, _Symbol, price,
+                      sl * SymbolInfoDouble(_Symbol, SYMBOL_POINT),
+                      tp * SymbolInfoDouble(_Symbol, SYMBOL_POINT), comment)) {
+        Print("Market Sell executed successfully with SL=", sl, " TP=", tp);
+    } else {
+        Print("Market Sell failed - error: ", GetLastError());
+    }
+}
+
+//+------------------------------------------------------------------+
+//| Close All Trades Function                                        |
+//+------------------------------------------------------------------+
+void closeAllTrade() {
+    for (int i = PositionsTotal() - 1; i >= 0; i--) {
+        if (PositionSelectByTicket(PositionGetTicket(i))) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
+                ExtTrade.PositionClose(PositionGetTicket(i));
+            } else if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL) {
+                ExtTrade.PositionClose(PositionGetTicket(i));
+            }
+        }
+    }
+}
+
+#endif  // TRADEMANAGEMENT_MQH
