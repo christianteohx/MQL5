@@ -25,6 +25,11 @@ enum ADX {
     USE_ADX,
 };
 
+enum ATR {
+    NO_ATR,
+    USE_ATR,
+};
+
 enum RISK_MANAGEMENT {
     OPTIMIZED,
     FIXED_PERCENTAGE,

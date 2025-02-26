@@ -133,39 +133,39 @@ double profit_with_tiebreaker() {
 }
 
 double GrowthWithDrawdownPenalty() {
-    double netProfit = TesterStatistics(STAT_PROFIT);          // Total net profit (primary focus)
-    double maxDrawdown = TesterStatistics(STAT_BALANCE_DD_RELATIVE); // Relative drawdown (0-100%)
-    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT);  // Total profit from winning trades
-    double grossLoss = MathAbs(TesterStatistics(STAT_GROSS_LOSS)); // Absolute total loss from losing trades
-    double totalTrades = TesterStatistics(STAT_TRADES);        // Total number of trades
-    double winRate = totalTrades > 0 ? TesterStatistics(STAT_PROFIT_TRADES) / totalTrades : 0; // Win rate
+    double netProfit = TesterStatistics(STAT_PROFIT);                                           // Total net profit (primary focus)
+    double maxDrawdown = TesterStatistics(STAT_BALANCE_DD_RELATIVE);                            // Relative drawdown (0-100%)
+    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT);                                   // Total profit from winning trades
+    double grossLoss = MathAbs(TesterStatistics(STAT_GROSS_LOSS));                              // Absolute total loss from losing trades
+    double totalTrades = TesterStatistics(STAT_TRADES);                                         // Total number of trades
+    double winRate = totalTrades > 0 ? TesterStatistics(STAT_PROFIT_TRADES) / totalTrades : 0;  // Win rate
 
     // Avoid division by zero or edge cases
-    if (totalTrades <= 0) return -1000.0; // Large negative score for no trades
-    if (maxDrawdown <= 0) maxDrawdown = 0.1; // Minimum drawdown for scaling
+    if (totalTrades <= 0) return -1000.0;     // Large negative score for no trades
+    if (maxDrawdown <= 0) maxDrawdown = 0.1;  // Minimum drawdown for scaling
 
     // Adjusted weights: prioritize profit heavily, minimize drawdown impact
-    double weightProfit = 0.9;    // Significantly higher weight for profit
-    double weightDrawdown = 0.05; // Much lower weight for drawdown
-    double weightLoss = 0.03;     // Minimal weight for losses
-    double weightWinRate = 0.02;  // Slight reward for consistency
+    double weightProfit = 0.9;     // Significantly higher weight for profit
+    double weightDrawdown = 0.05;  // Much lower weight for drawdown
+    double weightLoss = 0.03;      // Minimal weight for losses
+    double weightWinRate = 0.02;   // Slight reward for consistency
 
     // Normalize metrics for scale invariance, adjusting based on typical profit range
-    double normalizedProfit = netProfit / 10000.0; // Adjust based on your profit scale (e.g., /5000.0 or /10000.0)
-    double normalizedDrawdown = MathMin(maxDrawdown / 100.0, 0.5); // Cap drawdown at 0.5 (50%) to limit its impact
-    double normalizedLoss = grossLoss / 10000.0;     // Normalize losses
-    double normalizedWinRate = winRate;             // Already 0-1
+    double normalizedProfit = netProfit / 10000.0;                  // Adjust based on your profit scale (e.g., /5000.0 or /10000.0)
+    double normalizedDrawdown = MathMin(maxDrawdown / 100.0, 0.5);  // Cap drawdown at 0.5 (50%) to limit its impact
+    double normalizedLoss = grossLoss / 10000.0;                    // Normalize losses
+    double normalizedWinRate = winRate;                             // Already 0-1
 
     // Calculate score: profit dominates, with minimal penalties for drawdown and losses
     double score = (weightProfit * normalizedProfit) -
-                   (weightDrawdown * normalizedDrawdown * 10.0) - // Controlled drawdown penalty
+                   (weightDrawdown * normalizedDrawdown * 10.0) -  // Controlled drawdown penalty
                    (weightLoss * normalizedLoss) +
                    (weightWinRate * normalizedWinRate * 10.0);
 
     // Ensure profit always takes precedence:
     // If profit is positive, cap drawdown penalty to prevent overriding profit
     if (netProfit > 0) {
-        score = MathMax(score, normalizedProfit * 0.9); // Ensure profit drives the score
+        score = MathMax(score, normalizedProfit * 0.9);  // Ensure profit drives the score
         // Cap total drawdown penalty to 10% of profit contribution
         double maxDrawdownPenalty = normalizedProfit * 0.1;
         score = MathMax(score, (weightProfit * normalizedProfit) - maxDrawdownPenalty);
@@ -173,11 +173,11 @@ double GrowthWithDrawdownPenalty() {
 
     // Penalize negative profit heavily, but still allow profit to dominate comparisons
     if (netProfit < 0) {
-        score *= 0.01; // Severe penalty for losses, but scaled to avoid masking profit differences
+        score *= 0.01;  // Severe penalty for losses, but scaled to avoid masking profit differences
     }
 
     // Optional: Cap the score to prevent extreme values
-    return MathMax(-10.0, MathMin(10.0, score)); // Limits score range for stability
+    return MathMax(-10.0, MathMin(10.0, score));  // Limits score range for stability
 }
 
 #endif
