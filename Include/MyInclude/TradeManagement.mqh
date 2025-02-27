@@ -10,7 +10,6 @@ struct closePosition {
 };
 
 void trade(bool buy, bool sell) {
-    printf("Trade function called with buy: %d, sell: %d", buy, sell);
     if (buy) {
         closeAllTrade();
         BuyAtMarket();
@@ -55,8 +54,6 @@ void thresholdTrade(double buy_confidence, double sell_confidence, double buy_th
 void BuyAtMarket(string comments = "") {
     double sl = 0;
     double tp = 0;
-
-    printf("Buy with SL: %.2f, TP: %.2f", SL, TP);
 
     if (SL > 0)
         sl = NormalizeDouble(tick.ask - (SL), decimal);
