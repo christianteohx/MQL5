@@ -37,6 +37,11 @@ enum ADX {
     USE_ADX,
 };
 
+enum ATR {
+    NO_ATR,
+    USE_ATR,
+};
+
 enum RISK_MANAGEMENT {
     OPTIMIZED,
     FIXED_PERCENTAGE,
@@ -62,47 +67,56 @@ enum TICKER {
     XAUUSD
 };
 
-sinput string s0;  //-----------------Strategy-----------------
+sinput string strategy_string;  //-----------------Strategy-----------------
 input TICKER ticker = BTCUSD;
 input MA ma_strategy = TRIPLE_MA;
 input RSI rsi_strategy = LIMIT;
 input MACD macd_strategy = HIST;
 input ADX adx_strategy = USE_ADX;
+input ATR atr_strategy = USE_ATR;
 input RISK_MANAGEMENT risk_management = OPTIMIZED;
 
-sinput string s1;                  //-----------------Moving Average-----------------
-input int first_ema_period = 13;   // first EMA period
-input int second_ema_period = 48;  // second EMA period
-input int third_ema_period = 200;  // third EMA period
-input double weightMA = 0.4;       // Weight for MA strategy
+sinput string moving_average_string;  //-----------------Moving Average-----------------
+input int first_ema_period = 13;      // first EMA period
+input int second_ema_period = 48;     // second EMA period
+input int third_ema_period = 200;     // third EMA period
+input double weightMA = 0.4;          // Weight for MA strategy
 
-sinput string s2;               //-----------------RSI-----------------
+sinput string rsi_string;       //-----------------RSI-----------------
 input int rsi_period = 14;      // RSI period
 input int rsi_overbought = 70;  // RSI overbought level
 input int rsi_oversold = 30;    // RSI oversold level
 input double weightRSI = 0.3;   // Weight for RSI strategy
 
-sinput string s3;               //-----------------MACD-----------------
+sinput string macd_string;      //-----------------MACD-----------------
 input int macd_fast = 12;       // MACD Fast
 input int macd_slow = 26;       // MACD Slow
 input int macd_period = 9;      // MACD Period
 input double weightMACD = 0.2;  // Weight for MACD strategy
 
-sinput string s4;              //-----------------ADX-----------------
+sinput string adx_string;      //-----------------ADX-----------------
 input int adx_period = 14;     // ADX period
 input int adx_diff = 20;       // ADX difference
 input double weightADX = 0.1;  // Weight for ADX strategy
+
+sinput string atr_string;              //-----------------ATR-----------------
+input int atr_period = 14;             // ATR period
+input double atr_sl_multiplier = 2.0;  // ATR multiplier for Stop Loss
+input double atr_tp_multiplier = 3.0;  // ATR multiplier for Take Profit
+input double min_volatility = 1.0;     // Minimum ATR in points to trade
+input double max_volatility = 100.0;   // Maximum ATR in points to trade
+input double atr_weight = 0.1;         // Weight for ATR strategy
 
 sinput string s5;                   //-----------------Risk Management-----------------
 input bool use_threshold = true;    // Use threshold
 input double buy_threshold = 0.5;   // Buy Threshold
 input double sell_threshold = 0.5;  // Sell Threshold
-input double SL = 10;               // Stop Loss
-input double TP = 10;               // Take Profit
+input double SL = 10;               // Fixed Stop Loss (in points, fallback if not using ATR)
+input double TP = 10;               // Fixed Take Profit (in points, fallback if not using ATR)
 input int percent_change = 5;       // Percent Change before re-buying
 input bool trailing_sl = true;      // Trailing Stop Loss
 input int max_risk = 10;            // Maximum risk (%) per trade
-input double decrease_factor = 3;   // Descrease factor
+input double decrease_factor = 3;   // Decrease factor
 input bool boost = false;           // Use high risk until target reached
 input double boost_target = 5000;   // Boost target
 
@@ -117,6 +131,7 @@ double normalizedWeightMa = 0.0;    // Normalized weight for MA
 double normalizedWeightRsi = 0.0;   // Normalized weight for RSI
 double normalizedWeightMacd = 0.0;  // Normalized weight for MACD
 double normalizedWeightAdx = 0.0;   // Normalized weight for ADX
+double normalizedWeightAtr = 0.0;   // Normalized weight for ATR
 
 int first_ema_handle;       // Handle First EMA
 double first_ema_buffer[];  // Buffer First EMA
@@ -139,10 +154,13 @@ double adx_buffer[];      // ADX Main Buffer
 double DI_plusBuffer[];   // ADX Plus Buffer
 double DI_minusBuffer[];  // ADX Minus Buffer
 
+int atr_handle;       // Handle ATR (added)
+double atr_buffer[];  // Buffer ATR (added)
+
 //+------------------------------------------------------------------+
 //| Variable for functions                                           |
 //+------------------------------------------------------------------+
-int magic_number = 50357114;  // Magic number
+ulong magic_number = 50357114;  // Magic number (changed to ulong to avoid overflow)
 double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
 double points = 1 / contract_size;                        // Point
 int decimal = SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);  // Decimal
@@ -170,42 +188,50 @@ int OnInit() {
     Print("Points: ", points);
     Print("Contract Size: ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE));
     Print("Decimal: ", decimal);
+    Print("Symbol Point: ", SymbolInfoDouble(_Symbol, SYMBOL_POINT));  // Debug SYMBOL_POINT
 
     if (ma_strategy == SINGLE_MA) {
         if (first_ema_period < 1) {
             Alert("Invalid EMA period");
-            return -1;
+            return INIT_FAILED;
         }
     } else if (ma_strategy == DOUBLE_MA) {
         if (first_ema_period >= second_ema_period) {
             Alert("Invalid EMA period");
-            return -1;
+            return INIT_FAILED;
         }
     } else if (ma_strategy == TRIPLE_MA) {
         if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
             Alert("Invalid EMA period");
-            return -1;
+            return INIT_FAILED;
         }
     }
 
     if (rsi_strategy != NO_RSI) {
         if (rsi_overbought < rsi_oversold) {
             Alert("Invalid RSI levels");
-            return -1;
+            return INIT_FAILED;
         }
     }
 
     if (macd_strategy != NO_MACD) {
         if (macd_fast >= macd_slow) {
             Alert("Invalid MACD levels");
-            return -1;
+            return INIT_FAILED;
         }
     }
 
     if (adx_strategy != NO_ADX) {
         if (adx_period < 1) {
             Alert("Invalid ADX period");
-            return -1;
+            return INIT_FAILED;
+        }
+    }
+
+    if (atr_strategy == USE_ATR) {
+        if (atr_period < 1) {
+            Alert("Invalid ATR period");
+            return INIT_FAILED;
         }
     }
 
@@ -220,11 +246,14 @@ int OnInit() {
     rsi_handle = iRSI(_Symbol, _Period, rsi_period, PRICE_CLOSE);
     macd_handle = iMACD(_Symbol, _Period, macd_fast, macd_slow, macd_period, PRICE_CLOSE);
     adx_handle = iADX(_Symbol, _Period, adx_period);
+    atr_handle = iATR(_Symbol, _Period, atr_period);  // Initialize ATR handle
 
-    // Check if the EMA was created successfully
-    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE) {
+    // Check if the indicators were created successfully
+    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE ||
+        rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE ||
+        (atr_strategy == USE_ATR && atr_handle == INVALID_HANDLE)) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
-        return -1;
+        return INIT_FAILED;
     }
 
     // Check active indicators and sum their weights
@@ -244,7 +273,11 @@ int OnInit() {
         totalWeight += weightADX;
     }
 
-    // normalize weights for active indicators
+    if (atr_strategy == USE_ATR) {
+        totalWeight += atr_weight;
+    }
+
+    // Normalize weights for active indicators
     if (ma_strategy != NO_MA) {
         normalizedWeightMa = weightMA / totalWeight;
     }
@@ -261,6 +294,10 @@ int OnInit() {
         normalizedWeightAdx = weightADX / totalWeight;
     }
 
+    if (atr_strategy == USE_ATR) {
+        normalizedWeightAtr = atr_weight / totalWeight;
+    }
+
     last_close_position.buySell = NULL;
     last_close_position.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
@@ -273,6 +310,7 @@ int OnInit() {
     ChartIndicatorAdd(0, 1, rsi_handle);
     ChartIndicatorAdd(0, 2, macd_handle);
     ChartIndicatorAdd(0, 3, adx_handle);
+    ChartIndicatorAdd(0, 4, atr_handle);  // Add ATR to chart for visualization
 
     SetIndexBuffer(0, first_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
@@ -298,18 +336,18 @@ void OnDeinit(const int reason) {
     IndicatorRelease(rsi_handle);
     IndicatorRelease(macd_handle);
     IndicatorRelease(adx_handle);
+    IndicatorRelease(atr_handle);  // Release ATR handle
 }
 
 bool IsTradingTime() {
     MqlDateTime tm = {};
     datetime time = TimeCurrent(tm);
 
-    // Check if the time is between 10:30 and 11:30
+    // Check if the time is between 17:30 and 18:30
     if ((tm.hour == 17 && tm.min >= 30) || (tm.hour == 18 && tm.min <= 30)) {
-        // Print("Time- ", tm.hour, ":", tm.min);
-        return true;  // It is within the trading window
+        return true;  // Within the trading window
     }
-    return false;  // It is outside the trading window
+    return false;  // Outside the trading window
 }
 
 //+------------------------------------------------------------------+
@@ -321,18 +359,26 @@ void OnTick() {
         return;
     }
 
-    CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer);
-    CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer);
-    CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer);
-    CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer);
-    CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer);    // MACD Main Line
-    CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer);  // Signal Line
-    CopyBuffer(adx_handle, 0, 0, 4, adx_buffer);           // ADX
-    CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer);        // DI+
-    CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer);       // DI-
+    // Copy indicator buffers with error handling
+    if (CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer) < 4 ||
+        CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer) < 4 ||
+        CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer) < 4 ||
+        CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer) < 4 ||
+        CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer) < 4 ||
+        CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer) < 4 ||
+        CopyBuffer(adx_handle, 0, 0, 4, adx_buffer) < 4 ||
+        CopyBuffer(adx_handle, 1, 0, 4, DI_plusBuffer) < 4 ||
+        CopyBuffer(adx_handle, 2, 0, 4, DI_minusBuffer) < 4 ||
+        CopyBuffer(atr_handle, 0, 0, 4, atr_buffer) < 4) {
+        Print("Failed to copy indicator data - error: ", GetLastError());
+        return;
+    }
 
     // Feed candle buffers with data
-    CopyRates(_Symbol, _Period, 0, 4, candle);
+    if (CopyRates(_Symbol, _Period, 0, 4, candle) < 4) {
+        Print("Failed to copy rates - error: ", GetLastError());
+        return;
+    }
     ArraySetAsSeries(candle, true);
 
     // Sort the data vector
@@ -345,8 +391,12 @@ void OnTick() {
     ArraySetAsSeries(adx_buffer, true);
     ArraySetAsSeries(DI_plusBuffer, true);
     ArraySetAsSeries(DI_minusBuffer, true);
+    ArraySetAsSeries(atr_buffer, true);
 
-    SymbolInfoTick(_Symbol, tick);
+    if (!SymbolInfoTick(_Symbol, tick)) {
+        Print("Failed to get tick data - error: ", GetLastError());
+        return;
+    }
 
     double buy_confidence = 0.0;
     double sell_confidence = 0.0;
@@ -354,6 +404,7 @@ void OnTick() {
     double confidenceRSI = 0.0;
     double confidenceMACD = 0.0;
     double confidenceADX = 0.0;
+    double confidenceATR = 0.0;
 
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
     bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
@@ -361,6 +412,7 @@ void OnTick() {
     bool buy_rsi = true;
     bool buy_macd = true;
     bool buy_adx = true;
+    bool buy_atr = true;
 
     bool sell_single_ma = candle[1].open > first_ema_buffer[1] && candle[1].close < first_ema_buffer[1];
     bool sell_ma_cross = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
@@ -368,11 +420,15 @@ void OnTick() {
     bool sell_rsi = true;
     bool sell_macd = true;
     bool sell_adx = true;
+    bool sell_atr = true;
 
     if (rsi_strategy == COMPARISON) {
         buy_rsi = rsi_buffer[0] > rsi_buffer[1];
         sell_rsi = rsi_buffer[0] < rsi_buffer[1];
+        confidenceRSI = (rsi_buffer[0] - rsi_buffer[1]) / rsi_buffer[1];  // Gradient confidence based on relative change
     } else if (rsi_strategy == LIMIT) {
+        confidenceRSI = (rsi_buffer[0] < rsi_oversold) ? (rsi_oversold - rsi_buffer[0]) / (rsi_oversold - rsi_overbought) : (rsi_buffer[0] > rsi_overbought) ? (rsi_overbought - rsi_buffer[0]) / (rsi_overbought - rsi_oversold)
+                                                                                                                                                             : 0.0;
         buy_rsi = rsi_buffer[0] < rsi_overbought;
         sell_rsi = rsi_buffer[0] > rsi_oversold;
     }
@@ -380,14 +436,36 @@ void OnTick() {
     if (macd_strategy == SIGNAL) {
         buy_macd = macd_main_buffer[0] > macd_signal_buffer[0] && macd_main_buffer[2] < macd_signal_buffer[2];
         sell_macd = macd_main_buffer[0] < macd_signal_buffer[0] && macd_main_buffer[2] > macd_signal_buffer[2];
+        confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
     } else if (macd_strategy == HIST) {
-        buy_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) > 0;
-        sell_macd = (macd_main_buffer[0] - macd_signal_buffer[0]) < 0;
+        double hist = macd_main_buffer[0] - macd_signal_buffer[0];
+        buy_macd = hist > 0;
+        sell_macd = hist < 0;
+        confidenceMACD = MathMin(1.0, MathMax(-1.0, hist * 10000));  // Gradient based on histogram size
     }
 
     if (adx_strategy == USE_ADX) {
         buy_adx = (DI_plusBuffer[0] - DI_minusBuffer[0]) > adx_diff;
         sell_adx = (DI_minusBuffer[0] - DI_plusBuffer[0]) > adx_diff;
+        confidenceADX = buy_adx ? 1.0 : (sell_adx ? -1.0 : 0.0);
+    }
+
+    double current_atr = atr_buffer[1];
+    // ATR Confidence: Higher volatility reduces confidence in signals
+    if (atr_strategy == USE_ATR) {
+        double atr_in_points = current_atr;
+        Print("ATR in Points: ", atr_in_points);
+
+        // Volatility filter: Skip trades if ATR is too low or too high
+        if (atr_in_points < min_volatility || atr_in_points > max_volatility) {
+            Print("Volatility out of bounds (ATR = ", atr_in_points, " points). Skipping trade.");
+            return;
+        }
+
+        // ATR confidence: Higher volatility reduces confidence (adjust as needed)
+        confidenceATR = MathMin(1.0, max_volatility / atr_in_points);  // Scale confidence inversely with volatility
+        buy_atr = atr_in_points >= min_volatility && atr_in_points <= max_volatility;
+        sell_atr = atr_in_points >= min_volatility && atr_in_points <= max_volatility;
     }
 
     bool Buy = true;
@@ -405,30 +483,26 @@ void OnTick() {
         Buy = buy_ma_cross && buy_triple_ma;
         Sell = sell_ma_cross && sell_triple_ma;
         confidenceMA = (buy_ma_cross && buy_triple_ma) ? 1.0 : ((sell_ma_cross && sell_triple_ma) ? -1.0 : 0.0);
-
-        // if (candle[1].open < third_ema_buffer[1] && candle[1].close > third_ema_buffer[1]) {
-        //     Buy = true;
-        // } else if (candle[1].open > third_ema_buffer[1] && candle[1].close < third_ema_buffer[1]) {
-        //     Sell = true;
-        // }
     }
 
     if (rsi_strategy != NO_RSI) {
         Buy = Buy && buy_rsi;
         Sell = Sell && sell_rsi;
-        confidenceRSI = buy_rsi ? 1.0 : (sell_rsi ? -1.0 : 0.0);
     }
 
     if (macd_strategy != NO_MACD) {
         Buy = Buy && buy_macd;
         Sell = Sell && sell_macd;
-        confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
     }
 
     if (adx_strategy != NO_ADX) {
         Buy = Buy && buy_adx;
         Sell = Sell && sell_adx;
-        confidenceADX = buy_adx ? 1.0 : (sell_adx ? -1.0 : 0.0);
+    }
+
+    if (atr_strategy == USE_ATR) {
+        Buy = Buy && buy_atr;
+        Sell = Sell && sell_atr;
     }
 
     if (ma_strategy != NO_MA) {
@@ -451,6 +525,11 @@ void OnTick() {
         sell_confidence += -confidenceADX * normalizedWeightAdx;
     }
 
+    if (atr_strategy == USE_ATR) {
+        buy_confidence += confidenceATR * normalizedWeightAtr;
+        sell_confidence += -confidenceATR * normalizedWeightAtr;
+    }
+
     // Ensure confidence is within [0,1]
     buy_confidence = MathMax(0.0, MathMin(1.0, buy_confidence));
     sell_confidence = MathMax(0.0, MathMin(1.0, sell_confidence));
@@ -466,39 +545,31 @@ void OnTick() {
                 closeAllTrade();
                 const string message = "Buy Signal for " + _Symbol;
                 SendNotification(message);
-                BuyAtMarket();
+                BuyAtMarket(current_atr);
                 return;
             } else if (buy_confidence >= buy_threshold) {
                 closeAllTrade();
                 const string message = "Buy Signal for " + _Symbol;
                 SendNotification(message);
-                BuyAtMarket();
+                BuyAtMarket(current_atr);
             }
 
             if (!use_threshold && Sell) {
                 closeAllTrade();
                 const string message = "Sell Signal for " + _Symbol;
                 SendNotification(message);
-                SellAtMarket();
+                SellAtMarket(current_atr);
                 return;
             } else if (sell_confidence >= sell_threshold) {
-                // printf("Sell");
                 closeAllTrade();
-                // drawVerticalLine("Sell", candle[1].time, clrRed);
                 const string message = "Sell Signal for " + _Symbol;
                 SendNotification(message);
-                SellAtMarket();
+                SellAtMarket(current_atr);
             }
         }
     }
 
-    ArrayFree(first_ema_buffer);
-    ArrayFree(second_ema_buffer);
-    ArrayFree(third_ema_buffer);
-    ArrayFree(rsi_buffer);
-
     if (percent_change > 0 && !CheckForOpenTrade()) {
-        // printf("No open trades");
         CheckPercentChange();
     }
 
@@ -513,7 +584,7 @@ void OnTick() {
 
 //+------------------------------------------------------------------+
 //| Useful functions                                                 |
-//+------------------------------------------------------------------+
+//+------------------------------------------------------------------
 //--- for bar change
 bool isNewBar() {
     static datetime last_time = 0;
@@ -544,33 +615,48 @@ void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue) {
 //+------------------------------------------------------------------+
 //| FUNCTIONS FOR SENDING ORDERS                                     |
 //+------------------------------------------------------------------+
-void BuyAtMarket(string comments = "") {
+void BuyAtMarket(double current_atr, string comments = "") {
     double sl = 0;
     double tp = 0;
 
-    if (SL > 0)
-        sl = NormalizeDouble(tick.ask - (SL), decimal);
-    if (TP > 0)
-        tp = NormalizeDouble(tick.ask + (TP), decimal);
+    if (atr_strategy == USE_ATR && current_atr > 0) {
+        // Use ATR for dynamic SL/TP (convert ATR to points if needed)
+        double atr_in_points = current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        sl = NormalizeDouble(tick.ask - (atr_in_points * atr_sl_multiplier), decimal);
+        tp = NormalizeDouble(tick.ask + (atr_in_points * atr_tp_multiplier), decimal);
+    } else {
+        // Fallback to fixed SL/TP if ATR is not used or unavailable
+        if (SL > 0)
+            sl = NormalizeDouble(tick.ask - (SL), decimal);
+        if (TP > 0)
+            tp = NormalizeDouble(tick.ask + (TP), decimal);
+    }
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, getVolume(), tick.ask, sl, tp, comments)) {
         Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
               ". Code description: ", ExtTrade.ResultRetcodeDescription());
         Print("Ask: ", tick.ask, " SL: ", sl, " TP: ", tp);
-
     } else {
         // Print("Order Buy Executed successfully!");
     }
 }
 
-void SellAtMarket(string comments = "") {
+void SellAtMarket(double current_atr, string comments = "") {
     double sl = 0;
     double tp = 0;
 
-    if (SL > 0)
-        sl = NormalizeDouble(tick.bid + (SL), decimal);
-    if (TP > 0)
-        tp = NormalizeDouble(tick.bid - (TP), decimal);
+    if (atr_strategy == USE_ATR && current_atr > 0) {
+        // Use ATR for dynamic SL/TP (convert ATR to points if needed)
+        double atr_in_points = current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        sl = NormalizeDouble(tick.bid + (atr_in_points * atr_sl_multiplier), decimal);
+        tp = NormalizeDouble(tick.bid - (atr_in_points * atr_tp_multiplier), decimal);
+    } else {
+        // Fallback to fixed SL/TP if ATR is not used or unavailable
+        if (SL > 0)
+            sl = NormalizeDouble(tick.bid + (SL), decimal);
+        if (TP > 0)
+            tp = NormalizeDouble(tick.bid - (TP), decimal);
+    }
 
     if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_SELL, getVolume(), tick.bid, sl, tp, comments)) {
         Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
@@ -604,19 +690,19 @@ void CheckPercentChange() {
         if (last_close_position.buySell == NULL) {
             if (change > 0) {
                 printf("Buying after %.2f%% change", change);
-                BuyAtMarket("Continue buy");
+                BuyAtMarket(0.0, "Continue buy");  // Pass 0.0 as ATR if not used
             } else {
                 printf("Selling after %.2f%% change", change);
-                SellAtMarket("Continue sell");
+                SellAtMarket(0.0, "Continue sell");  // Pass 0.0 as ATR if not used
             }
         }
 
         if (last_close_position.buySell == POSITION_TYPE_BUY) {
             printf("Rebuying after %.2f%% change", change);
-            BuyAtMarket("Continue buy");
+            BuyAtMarket(0.0, "Continue buy");  // Pass 0.0 as ATR if not used
         } else {
             printf("Reselling after %.2f%% change", change);
-            SellAtMarket("Continue sell");
+            SellAtMarket(0.0, "Continue sell");  // Pass 0.0 as ATR if not used
         }
     }
 }
@@ -766,7 +852,7 @@ int optimizedVol(void) {
 
     double volume = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * max_risk / margin, 2);
 
-    //--- calculate number of losses orders without a break1
+    //--- calculate number of losses orders without a break
     if (decrease_factor > 0) {
         //--- select history for access
         HistorySelect(0, TimeCurrent());
@@ -814,8 +900,6 @@ int optimizedVol(void) {
 
     if (volume > maxvol)
         volume = maxvol;
-
-    //--- return trading volume
 
     Print("Optimized Volume: ", volume);
     return (int)volume;
