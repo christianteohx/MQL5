@@ -115,7 +115,7 @@ input double SL = 10;               // Fixed Stop Loss (in points, fallback if n
 input double TP = 10;               // Fixed Take Profit (in points, fallback if not using ATR)
 input int percent_change = 5;       // Percent Change before re-buying
 input bool trailing_sl = true;      // Trailing Stop Loss
-input bool trailing_tp = false;      // Trailing Take Profit
+input bool trailing_tp = false;     // Trailing Take Profit
 input int max_risk = 10;            // Maximum risk (%) per trade
 input double decrease_factor = 3;   // Decrease factor
 input bool boost = false;           // Use high risk until target reached
@@ -155,8 +155,8 @@ double adx_buffer[];      // ADX Main Buffer
 double DI_plusBuffer[];   // ADX Plus Buffer
 double DI_minusBuffer[];  // ADX Minus Buffer
 
-int atr_handle;       // Handle ATR (added)
-double atr_buffer[];  // Buffer ATR (added)
+int atr_handle;       // Handle ATR
+double atr_buffer[];  // Buffer ATR
 
 //+------------------------------------------------------------------+
 //| Variable for functions                                           |
@@ -352,6 +352,33 @@ bool IsTradingTime() {
 }
 
 //+------------------------------------------------------------------+
+//| Check for open position direction                                |
+//+------------------------------------------------------------------+
+bool HasBuyPosition() {
+    for (int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if (PositionSelectByTicket(ticket)) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY && PositionGetString(POSITION_SYMBOL) == _Symbol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+bool HasSellPosition() {
+    for (int i = 0; i < PositionsTotal(); i++) {
+        ulong ticket = PositionGetTicket(i);
+        if (PositionSelectByTicket(ticket)) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL && PositionGetString(POSITION_SYMBOL) == _Symbol) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+//+------------------------------------------------------------------+
 //| Expert tick function                                             |
 //+------------------------------------------------------------------+
 void OnTick() {
@@ -539,52 +566,60 @@ void OnTick() {
     bool tradeTime = IsTradingTime();
 
     tradeTime = true;
+    bool openTrade = false;
 
-    if (tradeTime) {
-        if (newBar) {
-            if (buy_confidence > sell_confidence) {
-                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
-                Buy = true;
-                Sell = false;
-            } else if (sell_confidence > buy_confidence) {
-                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
-                Buy = false;
-                Sell = true;
-            } else {
-                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
-                Buy = false;
-                Sell = false;
-            }
+    if (tradeTime && newBar) {
+        // Check existing position direction
+        bool hasBuy = HasBuyPosition();
+        bool hasSell = HasSellPosition();
 
-            if (!use_threshold && Buy) {
-                closeAllTrade();
-                const string message = "Buy Signal for " + _Symbol;
-                SendNotification(message);
-                BuyAtMarket(current_atr);
-                return;
-            } else if (buy_confidence >= buy_threshold) {
-                closeAllTrade();
-                const string message = "Buy Signal for " + _Symbol;
-                SendNotification(message);
-                BuyAtMarket(current_atr);
-            } 
-            
-            if (!use_threshold && Sell) {
-                closeAllTrade();
-                const string message = "Sell Signal for " + _Symbol;
-                SendNotification(message);
-                SellAtMarket(current_atr);
-                return;
-            } else if (sell_confidence >= sell_threshold) {
-                closeAllTrade();
-                const string message = "Sell Signal for " + _Symbol;
-                SendNotification(message);
-                SellAtMarket(current_atr);
-            }
+        // Only allow one direction at a time
+        if (hasBuy && hasSell) {
+            // This should not happen due to closeAllTrade(), but just in case, close all trades
+            Print("Warning: Both buy and sell positions detected. Closing all trades.");
+            closeAllTrade();
+            hasBuy = false;
+            hasSell = false;
+        }
+
+        // Determine trade direction based on confidence
+        bool shouldBuy = false;
+        bool shouldSell = false;
+
+        if (buy_confidence > sell_confidence && (buy_confidence >= buy_threshold || (!use_threshold && Buy))) {
+            shouldBuy = true;
+        } else if (sell_confidence > buy_confidence && (sell_confidence >= sell_threshold || (!use_threshold && Sell))) {
+            shouldSell = true;
+        }
+
+        // Prevent opening a new trade in the opposite direction if a position exists
+        if (hasBuy && shouldSell) {
+            Print("Cannot open Sell position: Existing Buy position detected. Closing Buy position first.");
+            closeAllTrade();
+            hasBuy = false;
+        } else if (hasSell && shouldBuy) {
+            Print("Cannot open Buy position: Existing Sell position detected. Closing Sell position first.");
+            closeAllTrade();
+            hasSell = false;
+        }
+
+        // Execute the trade based on the determined direction
+        if (shouldBuy && !hasBuy) {
+            closeAllTrade();  // Ensure no other positions exist
+            const string message = "Buy Signal for " + _Symbol;
+            SendNotification(message);
+            BuyAtMarket(current_atr);
+            openTrade = true;
+        } else if (shouldSell && !hasSell) {
+            closeAllTrade();  // Ensure no other positions exist
+            const string message = "Sell Signal for " + _Symbol;
+            SendNotification(message);
+            SellAtMarket(current_atr);
+            openTrade = true;
         }
     }
 
-    if (percent_change > 0 && !CheckForOpenTrade()) {
+    if (!openTrade && percent_change > 0 && !CheckForOpenTrade()) {
         CheckPercentChange();
     }
 
@@ -701,7 +736,7 @@ void CheckPercentChange() {
     double change = ((current_price - last_price) / last_price) * 100;
 
     if (MathAbs(change) > percent_change) {
-        closeAllTrade();
+        // closeAllTrade();
         if (last_close_position.buySell == NULL) {
             if (change > 0) {
                 printf("Buying after %.2f%% change", change);
@@ -710,6 +745,7 @@ void CheckPercentChange() {
                 printf("Selling after %.2f%% change", change);
                 SellAtMarket(0.0, "Continue sell");  // Pass 0.0 as ATR if not used
             }
+            return;
         }
 
         if (last_close_position.buySell == POSITION_TYPE_BUY) {
