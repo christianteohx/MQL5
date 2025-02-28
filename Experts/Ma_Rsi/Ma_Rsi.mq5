@@ -115,6 +115,7 @@ input double SL = 10;               // Fixed Stop Loss (in points, fallback if n
 input double TP = 10;               // Fixed Take Profit (in points, fallback if not using ATR)
 input int percent_change = 5;       // Percent Change before re-buying
 input bool trailing_sl = true;      // Trailing Stop Loss
+input bool trailing_tp = false;      // Trailing Take Profit
 input int max_risk = 10;            // Maximum risk (%) per trade
 input double decrease_factor = 3;   // Decrease factor
 input bool boost = false;           // Use high risk until target reached
@@ -573,7 +574,7 @@ void OnTick() {
         CheckPercentChange();
     }
 
-    if (trailing_sl) {
+    if (trailing_sl || trailing_tp) {
         updateSLTP();
     }
 
@@ -750,10 +751,8 @@ void updateSLTP() {
                     stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
                 }
 
-                if (TP > 0) {
+                if (trailing_tp && (take_profit < tick.bid + (TP) || take_profit == 0)) {
                     take_profit = NormalizeDouble(tick.bid + (TP), decimal);
-                } else {
-                    take_profit = NormalizeDouble(0, decimal);
                 }
 
                 if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
@@ -773,10 +772,8 @@ void updateSLTP() {
                     stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
                 }
 
-                if (TP > 0) {
+                if (trailing_tp && (take_profit > tick.ask - (TP) || take_profit == 0)) {
                     take_profit = NormalizeDouble(tick.ask - (TP), decimal);
-                } else {
-                    take_profit = NormalizeDouble(0, decimal);
                 }
 
                 if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
