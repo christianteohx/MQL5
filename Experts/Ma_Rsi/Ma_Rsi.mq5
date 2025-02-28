@@ -621,7 +621,7 @@ void BuyAtMarket(double current_atr, string comments = "") {
 
     if (atr_strategy == USE_ATR && current_atr > 0) {
         // Use ATR for dynamic SL/TP (convert ATR to points if needed)
-        double atr_in_points = current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        double atr_in_points = current_atr
         sl = NormalizeDouble(tick.ask - (atr_in_points * atr_sl_multiplier), decimal);
         tp = NormalizeDouble(tick.ask + (atr_in_points * atr_tp_multiplier), decimal);
     } else {
@@ -647,7 +647,7 @@ void SellAtMarket(double current_atr, string comments = "") {
 
     if (atr_strategy == USE_ATR && current_atr > 0) {
         // Use ATR for dynamic SL/TP (convert ATR to points if needed)
-        double atr_in_points = current_atr / SymbolInfoDouble(_Symbol, SYMBOL_POINT);
+        double atr_in_points = current_atr
         sl = NormalizeDouble(tick.bid + (atr_in_points * atr_sl_multiplier), decimal);
         tp = NormalizeDouble(tick.bid - (atr_in_points * atr_tp_multiplier), decimal);
     } else {
