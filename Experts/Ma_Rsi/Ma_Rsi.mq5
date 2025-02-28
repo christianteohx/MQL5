@@ -815,11 +815,9 @@ void updateSLTP(double current_atr) {
     int total = PositionsTotal();
 
     for (int i = 0; i < total; i++) {
-        //--- parameters of the order
         ulong position_ticket = PositionGetTicket(i);                 // ticket of the position
         string position_symbol = PositionGetString(POSITION_SYMBOL);  // symbol
-
-        double profit = PositionGetDouble(POSITION_PROFIT);  // open price
+        double profit = PositionGetDouble(POSITION_PROFIT);           // profit of the position
 
         if (profit > 0.00) {
             double prev_stop_loss = PositionGetDouble(POSITION_SL);
@@ -829,62 +827,84 @@ void updateSLTP(double current_atr) {
             double take_profit = prev_take_profit;
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
-                if (trailing_sl && (stop_loss < tick.bid - (SL) || stop_loss == 0)) {
+                double new_stop_loss = tick.bid - (SL);
+                if (trailing_sl) {
                     if (atr_strategy == USE_ATR) {
-                        stop_loss = NormalizeDouble(tick.ask - (current_atr * atr_sl_multiplier), decimal);
+                        printf("SL ATR: %f * %f = %f", current_atr, atr_sl_multiplier, current_atr * atr_sl_multiplier);
+                        new_stop_loss = NormalizeDouble(tick.ask - (current_atr * atr_sl_multiplier), decimal);
                     } else {
-                        stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
+                        new_stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
+                    }
+
+                    if (new_stop_loss > prev_stop_loss || stop_loss == 0) {
+                        stop_loss = new_stop_loss;
                     }
                 }
+                printf("Old SL: %f, New SL: %f", prev_stop_loss, stop_loss);
 
-                if (trailing_tp && (take_profit < tick.bid + (TP) || take_profit == 0)) {
+                double new_take_profit = tick.bid + (TP);
+                if (trailing_tp) {
                     if (atr_strategy == USE_ATR) {
-                        take_profit = NormalizeDouble(tick.ask + (current_atr * atr_tp_multiplier), decimal);
+                        printf("TP ATR: %f * %f = %f", current_atr, atr_tp_multiplier, current_atr * atr_tp_multiplier);
+                        new_take_profit = NormalizeDouble(tick.ask + (current_atr * atr_tp_multiplier), decimal);
                     } else {
-                        take_profit = NormalizeDouble(tick.bid + (TP), decimal);
+                        new_take_profit = NormalizeDouble(tick.bid + (TP), decimal);
+                    }
+
+                    if (new_take_profit < prev_take_profit || take_profit == 0) {
+                        take_profit = new_take_profit;
                     }
                 }
+                printf("Old TP: %f, New TP: %f", prev_take_profit, take_profit);
 
-                if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
+                if (new_stop_loss == prev_stop_loss && new_take_profit == prev_take_profit) {
                     continue;
                 }
 
                 if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
-                    //--- failure message
                     Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    // Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
-                } else {
-                    // Print(("Order Update Stop Loss Buy Executed successfully!"));
+                    Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
                 }
             } else {
-                if (trailing_sl && (stop_loss > tick.ask + (SL) || stop_loss == 0)) {
+                double new_stop_loss = tick.bid + (SL);
+                if (trailing_sl) {
                     if (atr_strategy == USE_ATR) {
-                        stop_loss = NormalizeDouble(tick.bid + (current_atr * atr_sl_multiplier), decimal);
+                        printf("SL ATR: %f * %f = %f", current_atr, atr_sl_multiplier, current_atr * atr_sl_multiplier);
+                        new_stop_loss = NormalizeDouble(tick.bid + (current_atr * atr_sl_multiplier), decimal);
                     } else {
-                        stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
+                        new_stop_loss = NormalizeDouble(tick.bid + (SL), decimal);
+                    }
+
+                    if (new_stop_loss < prev_stop_loss || stop_loss == 0) {
+                        stop_loss = new_stop_loss;
                     }
                 }
+                printf("Old SL: %f, New SL: %f", prev_stop_loss, stop_loss);
 
-                if (trailing_tp && (take_profit > tick.ask - (TP) || take_profit == 0)) {
+                double new_take_profit = tick.bid - (TP);
+                if (trailing_tp) {
                     if (atr_strategy == USE_ATR) {
-                        take_profit = NormalizeDouble(tick.bid - (current_atr * atr_tp_multiplier), decimal);
+                        printf("TP ATR: %f * %f = %f", current_atr, atr_tp_multiplier, current_atr * atr_tp_multiplier);
+                        new_take_profit = NormalizeDouble(tick.bid - (current_atr * atr_tp_multiplier), decimal);
                     } else {
-                        take_profit = NormalizeDouble(tick.ask - (TP), decimal);
+                        new_take_profit = NormalizeDouble(tick.bid - (TP), decimal);
+                    }
+
+                    if (new_take_profit > prev_take_profit || take_profit == 0) {
+                        take_profit = new_take_profit;
                     }
                 }
+                printf("Old TP: %f, New TP: %f", prev_take_profit, take_profit);
 
-                if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
+                if (new_stop_loss == prev_stop_loss && new_take_profit == prev_take_profit) {
                     continue;
                 }
 
                 if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
-                    //--- failure message
                     Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    // Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
-                } else {
-                    // Print(("Order Update Stop Loss Sell Executed successfully!"));
+                    Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
                 }
             }
         }
