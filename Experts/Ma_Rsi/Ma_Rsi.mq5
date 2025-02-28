@@ -624,7 +624,7 @@ void OnTick() {
     }
 
     if (trailing_sl || trailing_tp) {
-        updateSLTP();
+        updateSLTP(current_atr);
     }
 
     if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_BID) * 0.01 / 3.67)) {
@@ -776,7 +776,7 @@ void closeAllTrade() {
     }
 }
 
-void updateSLTP() {
+void updateSLTP(double current_atr) {
     MqlTradeRequest request;
     MqlTradeResult response;
 
@@ -798,11 +798,19 @@ void updateSLTP() {
 
             if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY) {
                 if (trailing_sl && (stop_loss < tick.bid - (SL) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
+                    if (atr_strategy == USE_ATR) {
+                        stop_loss = NormalizeDouble(tick.ask - (current_atr * atr_sl_multiplier), decimal);
+                    } else {
+                        stop_loss = NormalizeDouble(tick.bid - (SL), decimal);
+                    }
                 }
 
                 if (trailing_tp && (take_profit < tick.bid + (TP) || take_profit == 0)) {
-                    take_profit = NormalizeDouble(tick.bid + (TP), decimal);
+                    if (atr_strategy == USE_ATR) {
+                        take_profit = NormalizeDouble(tick.ask + (current_atr * atr_tp_multiplier), decimal);
+                    } else {
+                        take_profit = NormalizeDouble(tick.bid + (TP), decimal);
+                    }
                 }
 
                 if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
@@ -819,11 +827,19 @@ void updateSLTP() {
                 }
             } else {
                 if (trailing_sl && (stop_loss > tick.ask + (SL) || stop_loss == 0)) {
-                    stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
+                    if (atr_strategy == USE_ATR) {
+                        stop_loss = NormalizeDouble(tick.bid + (current_atr * atr_sl_multiplier), decimal);
+                    } else {
+                        stop_loss = NormalizeDouble(tick.ask + (SL), decimal);
+                    }
                 }
 
                 if (trailing_tp && (take_profit > tick.ask - (TP) || take_profit == 0)) {
-                    take_profit = NormalizeDouble(tick.ask - (TP), decimal);
+                    if (atr_strategy == USE_ATR) {
+                        take_profit = NormalizeDouble(tick.bid - (current_atr * atr_tp_multiplier), decimal);
+                    } else {
+                        take_profit = NormalizeDouble(tick.ask - (TP), decimal);
+                    }
                 }
 
                 if (stop_loss == prev_stop_loss && take_profit == prev_take_profit) {
