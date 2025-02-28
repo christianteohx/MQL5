@@ -455,7 +455,7 @@ void OnTick() {
     // ATR Confidence: Higher volatility reduces confidence in signals
     if (atr_strategy == USE_ATR) {
         double atr_in_points = current_atr;
-        Print("ATR in Points: ", atr_in_points);
+        // Print("ATR in Points: ", atr_in_points);
 
         // Volatility filter: Skip trades if ATR is too low or too high
         if (atr_in_points < min_volatility || atr_in_points > max_volatility) {
@@ -542,6 +542,20 @@ void OnTick() {
 
     if (tradeTime) {
         if (newBar) {
+            if (buy_confidence > sell_confidence) {
+                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
+                Buy = true;
+                Sell = false;
+            } else if (sell_confidence > buy_confidence) {
+                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
+                Buy = false;
+                Sell = true;
+            } else {
+                // Print("Buy confidence: ", buy_confidence, " | Sell confidence: ", sell_confidence);
+                Buy = false;
+                Sell = false;
+            }
+
             if (!use_threshold && Buy) {
                 closeAllTrade();
                 const string message = "Buy Signal for " + _Symbol;
@@ -553,7 +567,9 @@ void OnTick() {
                 const string message = "Buy Signal for " + _Symbol;
                 SendNotification(message);
                 BuyAtMarket(current_atr);
-            } else if (!use_threshold && Sell) {
+            } 
+            
+            if (!use_threshold && Sell) {
                 closeAllTrade();
                 const string message = "Sell Signal for " + _Symbol;
                 SendNotification(message);
