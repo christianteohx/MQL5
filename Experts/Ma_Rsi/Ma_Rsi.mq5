@@ -553,9 +553,7 @@ void OnTick() {
                 const string message = "Buy Signal for " + _Symbol;
                 SendNotification(message);
                 BuyAtMarket(current_atr);
-            }
-
-            if (!use_threshold && Sell) {
+            } else if (!use_threshold && Sell) {
                 closeAllTrade();
                 const string message = "Sell Signal for " + _Symbol;
                 SendNotification(message);
