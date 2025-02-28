@@ -734,6 +734,40 @@ void CheckPercentChange() {
     double last_price = last_close_position.price;
 
     double change = ((current_price - last_price) / last_price) * 100;
+    
+    // Check if last trade closed with loss
+    HistorySelect(0, TimeCurrent());
+    int totalDeals = HistoryDealsTotal();
+    bool foundLastPosition = false;
+    double lastProfit = 0.0;
+    int lastType = NULL;
+    double lastPrice = 0.0;
+
+    for (int i = totalDeals - 1; i >= 0; i--) {
+        ulong dealTicket = HistoryDealGetTicket(i);
+        if (dealTicket == 0) continue;
+
+        // Check if the deal is for the current symbol and is a position closure (DEAL_TYPE_BALANCE or DEAL_TYPE_CREDIT are not position closures)
+        if (HistoryDealGetString(dealTicket, DEAL_SYMBOL) == _Symbol &&
+            (HistoryDealGetInteger(dealTicket, DEAL_TYPE) == DEAL_TYPE_BUY || HistoryDealGetInteger(dealTicket, DEAL_TYPE) == DEAL_TYPE_SELL) &&
+            HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_OUT) {
+            lastProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
+            lastType = (int)HistoryDealGetInteger(dealTicket, DEAL_TYPE);
+            lastPrice = HistoryDealGetDouble(dealTicket, DEAL_PRICE);
+            foundLastPosition = true;
+            break;
+        }
+    }
+
+    // Check if the last closed position was a loss
+    if (foundLastPosition) {
+        if (lastProfit < 0) {
+            Print("Last closed position was a loss (Profit: ", lastProfit, "). Skipping CheckPercentChange.");
+            return; // Exit the function early if the last position was a loss
+        }
+    } else {
+        Print("No last closed position found in history. Proceeding with CheckPercentChange.");
+    }
 
     if (MathAbs(change) > percent_change) {
         // closeAllTrade();
