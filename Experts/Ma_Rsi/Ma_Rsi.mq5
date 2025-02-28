@@ -486,7 +486,7 @@ void OnTick() {
 
         // Volatility filter: Skip trades if ATR is too low or too high
         if (atr_in_points < min_volatility || atr_in_points > max_volatility) {
-            Print("Volatility out of bounds (ATR = ", atr_in_points, " points). Skipping trade.");
+            // Print("Volatility out of bounds (ATR = ", atr_in_points, " points). Skipping trade.");
             return;
         }
 
@@ -576,7 +576,7 @@ void OnTick() {
         // Only allow one direction at a time
         if (hasBuy && hasSell) {
             // This should not happen due to closeAllTrade(), but just in case, close all trades
-            Print("Warning: Both buy and sell positions detected. Closing all trades.");
+            // Print("Warning: Both buy and sell positions detected. Closing all trades.");
             closeAllTrade();
             hasBuy = false;
             hasSell = false;
@@ -594,11 +594,11 @@ void OnTick() {
 
         // Prevent opening a new trade in the opposite direction if a position exists
         if (hasBuy && shouldSell) {
-            Print("Cannot open Sell position: Existing Buy position detected. Closing Buy position first.");
+            // Print("Cannot open Sell position: Existing Buy position detected. Closing Buy position first.");
             closeAllTrade();
             hasBuy = false;
         } else if (hasSell && shouldBuy) {
-            Print("Cannot open Buy position: Existing Sell position detected. Closing Sell position first.");
+            // Print("Cannot open Buy position: Existing Sell position detected. Closing Sell position first.");
             closeAllTrade();
             hasSell = false;
         }
@@ -734,7 +734,7 @@ void CheckPercentChange() {
     double last_price = last_close_position.price;
 
     double change = ((current_price - last_price) / last_price) * 100;
-    
+
     // Check if last trade closed with loss
     HistorySelect(0, TimeCurrent());
     int totalDeals = HistoryDealsTotal();
@@ -762,31 +762,29 @@ void CheckPercentChange() {
     // Check if the last closed position was a loss
     if (foundLastPosition) {
         if (lastProfit < 0) {
-            Print("Last closed position was a loss (Profit: ", lastProfit, "). Skipping CheckPercentChange.");
-            return; // Exit the function early if the last position was a loss
+            // Print("Last closed position was a loss (Profit: ", lastProfit, "). Skipping CheckPercentChange.");
+            return;  // Exit the function early if the last position was a loss
         }
-    } else {
-        Print("No last closed position found in history. Proceeding with CheckPercentChange.");
     }
 
     if (MathAbs(change) > percent_change) {
         // closeAllTrade();
         if (last_close_position.buySell == NULL) {
             if (change > 0) {
-                printf("Buying after %.2f%% change", change);
+                // printf("Buying after %.2f%% change", change);
                 BuyAtMarket(0.0, "Continue buy");  // Pass 0.0 as ATR if not used
             } else {
-                printf("Selling after %.2f%% change", change);
+                // printf("Selling after %.2f%% change", change);
                 SellAtMarket(0.0, "Continue sell");  // Pass 0.0 as ATR if not used
             }
             return;
         }
 
         if (last_close_position.buySell == POSITION_TYPE_BUY) {
-            printf("Rebuying after %.2f%% change", change);
+            // printf("Rebuying after %.2f%% change", change);
             BuyAtMarket(0.0, "Continue buy");  // Pass 0.0 as ATR if not used
         } else {
-            printf("Reselling after %.2f%% change", change);
+            // printf("Reselling after %.2f%% change", change);
             SellAtMarket(0.0, "Continue sell");  // Pass 0.0 as ATR if not used
         }
     }
@@ -855,7 +853,7 @@ void updateSLTP(double current_atr) {
                     //--- failure message
                     Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
+                    // Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
                 } else {
                     // Print(("Order Update Stop Loss Buy Executed successfully!"));
                 }
@@ -884,7 +882,7 @@ void updateSLTP(double current_atr) {
                     //--- failure message
                     Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
                           ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
+                    // Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
                 } else {
                     // Print(("Order Update Stop Loss Sell Executed successfully!"));
                 }
@@ -961,7 +959,7 @@ int optimizedVol(void) {
             ulong ticket = HistoryDealGetTicket(i);
 
             if (ticket == 0) {
-                Print("HistoryDealGetTicket failed, no trade history");
+                // Print("HistoryDealGetTicket failed, no trade history");
                 break;
             }
 
@@ -998,7 +996,7 @@ int optimizedVol(void) {
     if (volume > maxvol)
         volume = maxvol;
 
-    Print("Optimized Volume: ", volume);
+    // Print("Optimized Volume: ", volume);
     return (int)volume;
 }
 
@@ -1013,8 +1011,8 @@ int boostVol(void) {
     double risk = MathMin(MathSqrt(MathPow(boost_target, 2) / MathPow(balance, 2)) * minRisk, 100);
     double volume = equity * (risk / 100) / contract_price;
 
-    printf("Risk: %.2f", risk);
-    printf("Volume: %.2f", volume);
+    // printf("Risk: %.2f", risk);
+    // printf("Volume: %.2f", volume);
 
     double min_vol = 1;
     double max_vol = 300;
@@ -1025,7 +1023,7 @@ int boostVol(void) {
         volume = max_vol;
     }
 
-    Print("Boost Volume: ", volume);
+    // Print("Boost Volume: ", volume);
 
     return int(volume);
 }
