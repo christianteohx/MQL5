@@ -941,21 +941,18 @@ void updateSLTP(double current_atr) {
                 if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) && 
                     NormalizeDouble(new_take_profit, decimal) == NormalizeDouble(prev_take_profit, decimal)) {
                     continue;
+                } else {
+
+                    printf ("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
+                    printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
+
+                    if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
+                        Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
+                              ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                        Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
+                    }
                 }
 
-                if (NormalizeDouble(new_stop_loss, decimal) - NormalizeDouble(prev_stop_loss, decimal) == 0 && 
-                    NormalizeDouble(new_take_profit, decimal) - NormalizeDouble(prev_take_profit, decimal) == 0) {
-                    continue;
-                }
-
-                printf ("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
-                printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
-
-                if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
-                    Print("Modify buy SL failed. Return code=", ExtTrade.ResultRetcode(),
-                          ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    Print("Bid: ", tick.bid, " SL: ", stop_loss, " TP: ", take_profit);
-                }
             } else {
                 double new_stop_loss = tick.bid + (SL);
                 if (trailing_sl) {
@@ -988,21 +985,18 @@ void updateSLTP(double current_atr) {
 
                 // check if the new SL and TP are the same as the previous ones
 
-                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) && NormalizeDouble(new_take_profit, decimal) == NormalizeDouble(prev_take_profit, decimal)) {
+                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) && 
+                    NormalizeDouble(new_take_profit, decimal) == NormalizeDouble(prev_take_profit, decimal)) {
                     continue;
-                }
+                } else{
+                    printf("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
+                    printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
 
-                if (NormalizeDouble(new_stop_loss, decimal) - NormalizeDouble(prev_stop_loss, decimal) == 0 && NormalizeDouble(new_take_profit, decimal) - NormalizeDouble(prev_take_profit, decimal) == 0) {
-                    continue;
-                }
-
-                printf("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
-                printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
-
-                if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
-                    Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
-                          ". Code description: ", ExtTrade.ResultRetcodeDescription());
-                    Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
+                    if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
+                        Print("Modify sell SL failed. Return code=", ExtTrade.ResultRetcode(),
+                              ". Code description: ", ExtTrade.ResultRetcodeDescription());
+                        Print("Ask: ", tick.ask, " SL: ", stop_loss, " TP: ", take_profit);
+                    }
                 }
             }
         }
