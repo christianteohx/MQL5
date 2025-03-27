@@ -190,6 +190,7 @@ int OnInit() {
         // contract_size = 0.1;
     }
 
+    IsTradingTime();
     Print("Symbol: ", _Symbol);
     Print("Points: ", points);
     Print("Contract Size: ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE));
@@ -279,9 +280,9 @@ int OnInit() {
         totalWeight += weightADX;
     }
 
-    if (atr_strategy == USE_ATR) {
-        totalWeight += atr_weight;
-    }
+    // if (atr_strategy == USE_ATR) {
+    //     totalWeight += atr_weight;
+    // }
 
     // if (totalWeight > 1.0) {
     //     Alert(("Total weight exceeds 1.0. Please adjust the weights."));
@@ -305,9 +306,9 @@ int OnInit() {
         normalizedWeightAdx = weightADX / totalWeight;
     }
 
-    if (atr_strategy == USE_ATR) {
-        normalizedWeightAtr = atr_weight / totalWeight;
-    }
+    // if (atr_strategy == USE_ATR) {
+    //     normalizedWeightAtr = atr_weight / totalWeight;
+    // }
 
     last_close_position.buySell = NULL;
     last_close_position.price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
@@ -358,7 +359,7 @@ bool IsTradingTime() {
     datetime time = TimeCurrent(tm);
 
     // Check if the time is between 17:30 and 18:30
-    if ((tm.hour == 17 && tm.min >= 30) || (tm.hour == 18 && tm.min <= 30)) {
+    if ((tm.hour == 16 && tm.min >= 30) || (tm.hour == 23 && tm.min < 30)) {
         return true;  // Within the trading window
     }
     return false;  // Outside the trading window
@@ -596,10 +597,10 @@ void OnTick() {
         sell_confidence += -confidenceADX * normalizedWeightAdx;
     }
 
-    if (atr_strategy == USE_ATR) {
-        buy_confidence += confidenceATR * normalizedWeightAtr;
-        sell_confidence += -confidenceATR * normalizedWeightAtr;
-    }
+    // if (atr_strategy == USE_ATR) {
+    //     buy_confidence += confidenceATR * normalizedWeightAtr;
+    //     sell_confidence += -confidenceATR * normalizedWeightAtr;
+    // }
 
     // Ensure confidence is within [0,1]
     buy_confidence = MathMax(0.0, MathMin(1.0, buy_confidence));
@@ -709,7 +710,7 @@ bool marketOpen() {
     }
 
     // Adjust GMT to New York time (UTC-5, assuming no DST for simplicity)
-    int ny_hour = dt.hour - 5;
+    int ny_hour = dt.hour + 3;
     int ny_minute = dt.min;
     if (ny_hour < 0) {
         ny_hour += 24;  // Adjust for day wrap-around
@@ -717,8 +718,8 @@ bool marketOpen() {
 
     // Convert current NY time to minutes for easier comparison
     int ny_time_minutes = ny_hour * 60 + ny_minute;
-    int market_open_minutes = 9 * 60 + 30;  // 9:30 AM = 570 minutes
-    int market_close_minutes = 16 * 60;     // 4:00 PM = 960 minutes
+    int market_open_minutes = 14 * 60 + 30;  // 9:30 AM = 570 minutes
+    int market_close_minutes = 21 * 60;      // 4:00 PM = 960 minutes
 
     // Check if current NY time is outside 9:30 AM to 4:00 PM
     if (ny_time_minutes < market_open_minutes || ny_time_minutes > market_close_minutes) {
@@ -938,12 +939,11 @@ void updateSLTP(double current_atr) {
                     }
                 }
 
-                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) && 
+                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) &&
                     NormalizeDouble(new_take_profit, decimal) == NormalizeDouble(prev_take_profit, decimal)) {
                     continue;
                 } else {
-
-                    printf ("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
+                    printf("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
                     printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
 
                     if (!ExtTrade.PositionModify(position_ticket, stop_loss, take_profit)) {
@@ -985,10 +985,10 @@ void updateSLTP(double current_atr) {
 
                 // check if the new SL and TP are the same as the previous ones
 
-                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) && 
+                if (NormalizeDouble(new_stop_loss, decimal) == NormalizeDouble(prev_stop_loss, decimal) &&
                     NormalizeDouble(new_take_profit, decimal) == NormalizeDouble(prev_take_profit, decimal)) {
                     continue;
-                } else{
+                } else {
                     printf("Old TP: %f, New TP: %f", NormalizeDouble(prev_take_profit, decimal), NormalizeDouble(take_profit, decimal));
                     printf("Old SL: %f, New SL: %f", NormalizeDouble(prev_stop_loss, decimal), NormalizeDouble(stop_loss, decimal));
 
@@ -1004,6 +1004,11 @@ void updateSLTP(double current_atr) {
 }
 
 int getVolume() {
+
+    if (risk_management == FIXED_VOLUME && fixed_volume > 0) {
+        return fixed_volume;
+    } 
+    
     if (boost == true && boost_target > 0) {
         if (ACCOUNT_BALANCE < boost_target) {
             return boostVol();
@@ -1016,8 +1021,6 @@ int getVolume() {
         return optimizedVol();
     } else if (risk_management == FIXED_PERCENTAGE) {
         return fixedPercentageVol();
-    } else if (risk_management == FIXED_VOLUME && fixed_volume > 0) {
-        return fixed_volume;
     } else {
         return 1;
     }
