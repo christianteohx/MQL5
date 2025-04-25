@@ -8,7 +8,6 @@
 #include <Tests/RSquared.mqh>
 #include <Tests/RootMeanSquaredError.mqh>
 #include <Trade/AccountInfo.mqh>
-#include <Trade/SymbolInfo.mqh>
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
@@ -66,14 +65,13 @@ enum TEST_CRITERION {
     NONE,
 };
 
-enum TRADE_CRITERIA {
-    CONDITION,
-    CONFIDENCE,
-    BOTH,
+enum TICKER {
+    BTCUSD,
+    XAUUSD
 };
 
-sinput string strategy_string;                    //-----------------Strategy-----------------
-input TRADE_CRITERIA trade_criteria = CONDITION;  // Trade criteria for strategy
+sinput string strategy_string;  //-----------------Strategy-----------------
+input TICKER ticker = BTCUSD;
 input MA ma_strategy = TRIPLE_MA;
 input RSI rsi_strategy = LIMIT;
 input MACD macd_strategy = HIST;
@@ -171,19 +169,15 @@ double atr_buffer[];  // Buffer ATR
 //+------------------------------------------------------------------+
 ulong magic_number = 50357114;  // Magic number (changed to ulong to avoid overflow)
 double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-int decimal = SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);               // Decimal
-double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);  // Tick size
-bool was_market_open = false;                                          // Variable to track market open state
-string reasoning = "";                                                 // Variable for reasoning
-double minVol, maxVol, stepVol;                                        // Variables for volume limits
-string _symbol;
-bool print_debug = false;  // Debug flag for printing debug information
+double points = 1 / contract_size;                        // Point
+int decimal = SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);  // Decimal
+bool was_market_open = false;                             // Variable to track market open state
+string reasoning = "";                                    // Variable for reasoning
 
 MqlRates candle[];  // Variable for storing candles
 MqlTick tick;       // Variable for storing ticks
 
 CTrade ExtTrade;
-CSymbolInfo symbolInfo;
 
 struct closePosition {
     int buySell;
@@ -194,28 +188,18 @@ struct closePosition {
 //| Expert initialization function                                   |
 //+------------------------------------------------------------------+
 int OnInit() {
-    // check if backtesting
-    if (MQLInfoInteger(MQL_TESTER)) {
-        print_debug = true;  // Enable debug printing for backtesting
+    if (ticker == BTCUSD) {
+    } else if (ticker == XAUUSD) {
+        // points = 1;
+        // contract_size = 0.1;
     }
 
     IsTradingTime();
-
-    // if symbol contains _corrected, remove it
-    if (StringFind(_Symbol, "_corrected") != -1) {
-        _symbol = StringSubstr(_Symbol, 0, StringFind(_Symbol, "_corrected"));
-    } else {
-        _symbol = _Symbol;  // Use the current symbol if no correction is needed
-    }
-    Print("Symbol: ", _symbol);
+    Print("Symbol: ", _Symbol);
+    Print("Points: ", points);
     Print("Contract Size: ", SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE));
     Print("Decimal: ", decimal);
     Print("Symbol Point: ", SymbolInfoDouble(_Symbol, SYMBOL_POINT));  // Debug SYMBOL_POINT
-    Print("Symbol Tick Size: ", tick_size);                            // Debug SYMBOL_TRADE_TICK_SIZE
-
-    minVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
-    maxVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
-    stepVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
     if (ma_strategy == SINGLE_MA) {
         if (first_ema_period < 1) {
@@ -304,6 +288,11 @@ int OnInit() {
     //     totalWeight += atr_weight;
     // }
 
+    // if (totalWeight > 1.0) {
+    //     Alert(("Total weight exceeds 1.0. Please adjust the weights."));
+    //     return INIT_FAILED;
+    // }
+
     // Normalize weights for active indicators
     if (ma_strategy != NO_MA) {
         normalizedWeightMa = weightMA / totalWeight;
@@ -349,7 +338,7 @@ int OnInit() {
     SetIndexBuffer(7, DI_plusBuffer, INDICATOR_DATA);
     SetIndexBuffer(8, DI_minusBuffer, INDICATOR_DATA);
 
-    const string message = _symbol + " Expert Advisor started!";
+    const string message = _Symbol + " Expert Advisor started!";
     SendNotification(message);
 
     return (INIT_SUCCEEDED);
@@ -387,7 +376,7 @@ bool HasBuyPosition() {
     for (int i = 0; i < PositionsTotal(); i++) {
         ulong ticket = PositionGetTicket(i);
         if (PositionSelectByTicket(ticket)) {
-            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY && PositionGetString(POSITION_SYMBOL) == _symbol) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_BUY && PositionGetString(POSITION_SYMBOL) == _Symbol) {
                 return true;
             }
         }
@@ -399,7 +388,7 @@ bool HasSellPosition() {
     for (int i = 0; i < PositionsTotal(); i++) {
         ulong ticket = PositionGetTicket(i);
         if (PositionSelectByTicket(ticket)) {
-            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL && PositionGetString(POSITION_SYMBOL) == _symbol) {
+            if (PositionGetInteger(POSITION_TYPE) == POSITION_TYPE_SELL && PositionGetString(POSITION_SYMBOL) == _Symbol) {
                 return true;
             }
         }
@@ -481,7 +470,7 @@ void OnTick() {
     double confidenceATR = 0.0;
 
     bool buy_single_ma = candle[1].open < first_ema_buffer[1] && candle[1].close > first_ema_buffer[1];
-    bool buy_double_ma = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
+    bool buy_ma_cross = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
     bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
     bool buy_rsi = true;
     bool buy_macd = true;
@@ -489,88 +478,27 @@ void OnTick() {
     bool buy_atr = true;
 
     bool sell_single_ma = candle[1].open > first_ema_buffer[1] && candle[1].close < first_ema_buffer[1];
-    bool sell_double_ma = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
+    bool sell_ma_cross = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
     bool sell_rsi = true;
     bool sell_macd = true;
     bool sell_adx = true;
     bool sell_atr = true;
 
-    bool buy_price_cross_single = candle[1].open <= first_ema_buffer[1] &&
-                                  candle[1].close > first_ema_buffer[1];
-    bool sell_price_cross_single = candle[1].open >= first_ema_buffer[1] &&
-                                   candle[1].close < first_ema_buffer[1];
+    bool buy_cross_single = candle[1].open <= first_ema_buffer[1] &&
+                            candle[1].close > first_ema_buffer[1];
+    bool sell_cross_single = candle[1].open >= first_ema_buffer[1] &&
+                             candle[1].close < first_ema_buffer[1];
 
-    bool buy_price_cross_double = (candle[1].open <= first_ema_buffer[1] && candle[1].open <= second_ema_buffer[1]) &&
-                                  (candle[1].close > first_ema_buffer[1] && candle[1].close > second_ema_buffer[1]);
-    bool sell_price_cross_double = (candle[1].open >= first_ema_buffer[1] && candle[1].open >= second_ema_buffer[1]) &&
-                                   (candle[1].close < first_ema_buffer[1] && candle[1].close < second_ema_buffer[1]);
+    bool buy_cross_double = !(candle[1].open >= first_ema_buffer[1] && candle[1].open >= second_ema_buffer[1]) &&
+                            (candle[1].close > first_ema_buffer[1] && candle[1].close > second_ema_buffer[1]);
+    bool sell_cross_double = !(candle[1].open <= first_ema_buffer[1] && candle[1].open <= second_ema_buffer[1]) &&
+                             (candle[1].close < first_ema_buffer[1] && candle[1].close < second_ema_buffer[1]);
 
-    bool buy_price_cross_triple = (candle[1].open <= first_ema_buffer[1] && candle[1].open <= second_ema_buffer[1] && candle[1].open <= third_ema_buffer[1]) &&
-                                  (candle[1].close > first_ema_buffer[1] && candle[1].close > second_ema_buffer[1] && candle[1].close > third_ema_buffer[1]);
-    bool sell_price_cross_triple = (candle[1].open >= first_ema_buffer[1] && candle[1].open >= second_ema_buffer[1] && candle[1].open >= third_ema_buffer[1]) &&
-                                   (candle[1].close < first_ema_buffer[1] && candle[1].close < second_ema_buffer[1] && candle[1].close < third_ema_buffer[1]);
-
-    bool Buy = true;
-    bool Sell = true;
-
-    if (ma_strategy == SINGLE_MA) {
-        Buy = buy_single_ma || buy_price_cross_single;
-        Sell = sell_single_ma || sell_price_cross_single;
-        confidenceMA = (buy_single_ma || buy_price_cross_single) ? 1.0 : ((sell_single_ma && sell_price_cross_single) ? -1.0 : 0.0);
-
-        if (Buy) {
-            reasoning += StringFormat("MA: Price crossed above single MA (Confidence: %.2f)\n", confidenceMA);
-        } else if (Sell) {
-            reasoning += StringFormat("MA: Price crossed below single MA (Confidence: %.2f)\n", -confidenceMA);
-        }
-
-    } else if (ma_strategy == DOUBLE_MA) {
-        Buy = buy_double_ma || buy_price_cross_double;
-        Sell = sell_double_ma || sell_price_cross_double;
-        confidenceMA = (buy_double_ma || buy_price_cross_double) ? 1.0 : ((sell_double_ma && sell_price_cross_double) ? -1.0 : 0.0);
-
-        if (buy_double_ma) {
-            reasoning += "MA: Fast MA crossed above slow MA";
-        } else if (sell_double_ma) {
-            reasoning += "MA: Fast MA crossed below slow MA";
-        }
-
-        if (buy_price_cross_double) {
-            reasoning += " and price above both MAs";
-        } else if (sell_price_cross_double) {
-            reasoning += " and price crossed below both MAs";
-        }
-
-        if (Buy) {
-            reasoning += StringFormat("(Confidence: %.2f)\n", confidenceMA);
-        } else if (Sell) {
-            reasoning += StringFormat("(Confidence: %.2f)\n", -confidenceMA);
-        }
-
-    } else if (ma_strategy == TRIPLE_MA) {
-        Buy = (buy_double_ma && buy_triple_ma) || buy_price_cross_triple;
-        Sell = (sell_double_ma && sell_triple_ma) || sell_price_cross_triple;
-        confidenceMA = ((buy_double_ma && buy_triple_ma) && buy_price_cross_triple) ? 1.0 : (((sell_double_ma && sell_triple_ma) && sell_price_cross_triple) ? -1.0 : 0.0);
-
-        if (buy_double_ma && buy_triple_ma) {
-            reasoning += "MA: Fast and mid MAs above slow MA";
-        } else if (sell_double_ma && sell_triple_ma) {
-            reasoning += "MA: Fast and mid MAs below slow MA";
-        }
-
-        if (buy_price_cross_triple) {
-            reasoning += ", price crossed above all MAs";
-        } else if (sell_price_cross_triple) {
-            reasoning += ", price crossed below all MAs";
-        }
-
-        if (Buy) {
-            reasoning += StringFormat(" (Confidence: %.2f)\n", confidenceMA);
-        } else if (Sell) {
-            reasoning += StringFormat(" (Confidence: %.2f)\n", -confidenceMA);
-        }
-    }
+    bool buy_cross_triple = !(candle[1].open >= first_ema_buffer[1] && candle[1].open >= second_ema_buffer[1] && candle[1].open >= third_ema_buffer[1]) &&
+                            (candle[1].close > first_ema_buffer[1] && candle[1].close > second_ema_buffer[1] && candle[1].close > third_ema_buffer[1]);
+    bool sell_cross_triple = !(candle[1].open <= first_ema_buffer[1] && candle[1].open <= second_ema_buffer[1] && candle[1].open <= third_ema_buffer[1]) &&
+                             (candle[1].close < first_ema_buffer[1] && candle[1].close < second_ema_buffer[1] && candle[1].close < third_ema_buffer[1]);
 
     if (rsi_strategy == COMPARISON) {
         buy_rsi = rsi_buffer[0] > rsi_buffer[1];
@@ -685,6 +613,43 @@ void OnTick() {
         }
     }
 
+    bool Buy = true;
+    bool Sell = true;
+
+    if (ma_strategy == SINGLE_MA) {
+        Buy = buy_single_ma && buy_cross_single;
+        Sell = sell_single_ma && sell_cross_single;
+        confidenceMA = (buy_single_ma && buy_cross_single) ? 1.0 : ((sell_single_ma && sell_cross_single) ? -1.0 : 0.0);
+
+        if (Buy) {
+            reasoning += StringFormat("MA: Price crossed above single MA (Confidence: %.2f)\n", confidenceMA);
+        } else if (Sell) {
+            reasoning += StringFormat("MA: Price crossed below single MA (Confidence: %.2f)\n", -confidenceMA);
+        }
+
+    } else if (ma_strategy == DOUBLE_MA) {
+        Buy = buy_ma_cross && buy_cross_double;
+        Sell = sell_ma_cross && sell_cross_double;
+        confidenceMA = (buy_ma_cross && buy_cross_double) ? 1.0 : ((sell_ma_cross && sell_cross_double) ? -1.0 : 0.0);
+
+        if (Buy) {
+            reasoning += StringFormat("MA: Fast MA crossed above slow MA and price above both (Confidence: %.2f)\n", confidenceMA);
+        } else if (Sell) {
+            reasoning += StringFormat("MA: Fast MA crossed below slow MA and price below both (Confidence: %.2f)\n", -confidenceMA);
+        }
+
+    } else if (ma_strategy == TRIPLE_MA) {
+        Buy = (buy_ma_cross && buy_triple_ma) && buy_cross_triple;
+        Sell = (sell_ma_cross && sell_triple_ma) && sell_cross_triple;
+        confidenceMA = ((buy_ma_cross && buy_triple_ma) && buy_cross_triple) ? 1.0 : (((sell_ma_cross && sell_triple_ma) && sell_cross_triple) ? -1.0 : 0.0);
+
+        if (Buy) {
+            reasoning += StringFormat("MA: Fast and mid MAs above slow MA, price above all (Confidence: %.2f)\n", confidenceMA);
+        } else if (Sell) {
+            reasoning += StringFormat("MA: Fast and mid MAs below slow MA, price below all (Confidence: %.2f)\n", -confidenceMA);
+        }
+    }
+
     if (rsi_strategy != NO_RSI) {
         Buy = Buy && buy_rsi;
         Sell = Sell && sell_rsi;
@@ -766,28 +731,6 @@ void OnTick() {
             hasBuy = false;
         }
 
-        if (trade_criteria == CONDITION) {
-            if (Buy && buy_confidence >= sell_confidence) {
-                shouldBuy = true;
-            } else if (Sell && sell_confidence >= buy_confidence) {
-                shouldSell = true;
-            }
-        } else if (trade_criteria == CONFIDENCE) {
-            // Use confidence thresholds to determine trade direction
-            if (buy_confidence >= buy_threshold && buy_confidence > sell_confidence) {
-                shouldBuy = true;
-            } else if (sell_confidence >= sell_threshold && sell_confidence > buy_confidence) {
-                shouldSell = true;
-            }
-        } else if (trade_criteria == BOTH) {
-            // Use both confidence and thresholds
-            if (Buy && buy_confidence >= buy_threshold && buy_confidence > sell_confidence) {
-                shouldBuy = true;
-            } else if (Sell && sell_confidence >= sell_threshold && sell_confidence > buy_confidence) {
-                shouldSell = true;
-            }
-        }
-
         if (buy_confidence > sell_confidence && (buy_confidence >= buy_threshold || (!use_threshold && Buy))) {
             shouldBuy = true;
         } else if (sell_confidence > buy_confidence && (sell_confidence >= sell_threshold || (!use_threshold && Sell))) {
@@ -809,24 +752,16 @@ void OnTick() {
         if (shouldBuy && !hasBuy) {
             // if (shouldBuy) {
             // closeAllTrade();  // Ensure no other positions exist
-            const string message = StringFormat("Buy Signal for %s\nBuy Confidence: %.2f\nReasoning:\n%s", _symbol, buy_confidence, reasoning);
-            if (print_debug) {
-                Print(message);  // Print debug message
-            } else {
-                SendNotification(message);  // Send notification if not debugging
-            }
+            const string message = StringFormat("Buy Signal for %s\nReasoning:\n%s", _Symbol, reasoning);
+            SendNotification(message);
             BuyAtMarket(current_atr);
             openTrade = true;
             reasoning = "";  // Reset reasoning after trade
         } else if (shouldSell && !hasSell) {
             // } else if (shouldSell) {
             // closeAllTrade();  // Ensure no other positions exist
-            const string message = StringFormat("Sell Signal for %s\nSell Confidence: %.2f\nReasoning:\n%s", _symbol, sell_confidence, reasoning);
-            if (print_debug) {
-                Print(message);  // Print debug message
-            } else {
-                SendNotification(message);  // Send notification if not debugging
-            }
+            const string message = StringFormat("Sell Signal for %s\nReasoning:\n%s", _Symbol, reasoning);
+            SendNotification(message);
             SellAtMarket(current_atr);
             openTrade = true;
             reasoning = "";  // Reset reasoning after trade
@@ -912,11 +847,6 @@ void drawVerticalLine(string name, datetime dt, color cor = clrAliceBlue) {
 //+------------------------------------------------------------------+
 //| FUNCTIONS FOR SENDING ORDERS                                     |
 //+------------------------------------------------------------------+
-
-double RoundToTick(double price) {
-    return MathRound(price / tick_size) * tick_size;
-}
-
 void BuyAtMarket(double current_atr, string comments = "") {
     double sl = 0;
     double tp = 0;
@@ -924,26 +854,26 @@ void BuyAtMarket(double current_atr, string comments = "") {
 
     if (atr_strategy == USE_ATR) {
         if (atr_sl_multiplier > 0)
-            sl = NormalizeDouble((tick.bid - (current_atr * atr_sl_multiplier) - spread), decimal);  // Adjust for bid at exit
+            sl = NormalizeDouble(tick.bid - (current_atr * atr_sl_multiplier) - spread, decimal);  // Adjust for bid at exit
         else
-            sl = NormalizeDouble((tick.bid - SL - spread), decimal);  // Adjust for bid at exit
+            sl = NormalizeDouble(tick.bid - SL - spread, decimal);  // Adjust for bid at exit
         if (atr_tp_multiplier > 0)
-            tp = NormalizeDouble(RoundToTick(tick.ask + (current_atr * atr_tp_multiplier) - spread), decimal);  // Adjust for bid at exit
+            tp = NormalizeDouble(tick.ask + (current_atr * atr_tp_multiplier) - spread, decimal);  // Adjust for bid at exit
         else
-            tp = NormalizeDouble(RoundToTick(tick.ask + TP - spread), decimal);  // Adjust for bid at exit
+            tp = NormalizeDouble(tick.ask + TP - spread, decimal);  // Adjust for bid at exit
     } else {
         if (SL > 0)
-            sl = NormalizeDouble(RoundToTick(tick.bid - SL - spread), decimal);  // Adjust for bid at exit
+            sl = NormalizeDouble(tick.bid - SL - spread, decimal);  // Adjust for bid at exit
         if (TP > 0)
-            tp = NormalizeDouble(RoundToTick(tick.ask + TP - spread), decimal);  // Adjust for bid at exit
+            tp = NormalizeDouble(tick.ask + TP - spread, decimal);  // Adjust for bid at exit
     }
 
     double volume = getVolume();  // Get the volume for the order
 
-    if (!ExtTrade.PositionOpen(_symbol, ORDER_TYPE_BUY, volume, tick.ask, sl, tp, comments)) {
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, volume, tick.ask, sl, tp, comments)) {
         uint retcode = ExtTrade.ResultRetcode();
         if (retcode == TRADE_RETCODE_INVALID_STOPS) {
-            if (!ExtTrade.PositionOpen(_symbol, ORDER_TYPE_BUY, volume, tick.ask, 0, 0, comments)) {
+            if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_BUY, volume, tick.ask, 0, 0, comments)) {
                 Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(),
                       ". Code description: ", ExtTrade.ResultRetcodeDescription());
                 Print("Ask: ", tick.ask);
@@ -954,7 +884,7 @@ void BuyAtMarket(double current_atr, string comments = "") {
             Print("Ask: ", tick.ask, " SL: ", sl, " TP: ", tp);
         }
     } else {
-        string message = "Buy " + _symbol + " \nPrice: " + DoubleToString(tick.ask, decimal) +
+        string message = "Buy " + _Symbol + " \nPrice: " + DoubleToString(tick.ask, decimal) +
                          "\nSL: " + DoubleToString(sl, decimal) + "\nTP: " + DoubleToString(tp, decimal);
         SendNotification(message);
     }
@@ -967,26 +897,26 @@ void SellAtMarket(double current_atr, string comments = "") {
 
     if (atr_strategy == USE_ATR) {
         if (atr_sl_multiplier > 0)
-            sl = NormalizeDouble(RoundToTick(tick.ask + (current_atr * atr_sl_multiplier) + spread), decimal);  // Adjust for ask at exit
+            sl = NormalizeDouble(tick.ask + (current_atr * atr_sl_multiplier) + spread, decimal);  // Adjust for ask at exit
         else
-            sl = NormalizeDouble(RoundToTick(tick.ask + SL + spread), decimal);  // Adjust for ask at exit
+            sl = NormalizeDouble(tick.ask + SL + spread, decimal);  // Adjust for ask at exit
         if (atr_tp_multiplier > 0)
-            tp = NormalizeDouble(RoundToTick(tick.bid - (current_atr * atr_tp_multiplier) + spread), decimal);  // Adjust for ask at exit
+            tp = NormalizeDouble(tick.bid - (current_atr * atr_tp_multiplier) + spread, decimal);  // Adjust for ask at exit
         else
-            tp = NormalizeDouble(RoundToTick(tick.bid - TP + spread), decimal);  // Adjust for ask at exit
+            tp = NormalizeDouble(tick.bid - TP + spread, decimal);  // Adjust for ask at exit
     } else {
         if (SL > 0)
-            sl = NormalizeDouble(RoundToTick(tick.ask + SL + spread), decimal);  // Adjust for ask at exit
+            sl = NormalizeDouble(tick.ask + SL + spread, decimal);  // Adjust for ask at exit
         if (TP > 0)
-            tp = NormalizeDouble(RoundToTick(tick.bid - TP + spread), decimal);  // Adjust for ask at exit
+            tp = NormalizeDouble(tick.bid - TP + spread, decimal);  // Adjust for ask at exit
     }
 
     double volume = getVolume();  // Get the volume for the order
 
-    if (!ExtTrade.PositionOpen(_symbol, ORDER_TYPE_SELL, volume, tick.bid, sl, tp, comments)) {
+    if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_SELL, volume, tick.bid, sl, tp, comments)) {
         uint retcode = ExtTrade.ResultRetcode();
         if (retcode == TRADE_RETCODE_INVALID_STOPS) {
-            if (!ExtTrade.PositionOpen(_symbol, ORDER_TYPE_SELL, volume, tick.bid, 0.0, 0.0, comments)) {
+            if (!ExtTrade.PositionOpen(_Symbol, ORDER_TYPE_SELL, volume, tick.bid, 0.0, 0.0, comments)) {
                 Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
                       ". Code description: ", ExtTrade.ResultRetcodeDescription());
                 Print("Bid: ", tick.bid);
@@ -997,7 +927,7 @@ void SellAtMarket(double current_atr, string comments = "") {
             Print("Bid: ", tick.bid, " SL: ", sl, " TP: ", tp);
         }
     } else {
-        string message = "Sell " + _symbol + "\nPrice: " + DoubleToString(tick.bid, decimal) +
+        string message = "Sell " + _Symbol + "\nPrice: " + DoubleToString(tick.bid, decimal) +
                          "\nSL: " + DoubleToString(sl, decimal) + "\nTP: " + DoubleToString(tp, decimal);
         SendNotification(message);
     }
@@ -1034,7 +964,7 @@ void CheckPercentChange() {
         if (dealTicket == 0) continue;
 
         // Check if the deal is for the current symbol and is a position closure (DEAL_TYPE_BALANCE or DEAL_TYPE_CREDIT are not position closures)
-        if (HistoryDealGetString(dealTicket, DEAL_SYMBOL) == _symbol &&
+        if (HistoryDealGetString(dealTicket, DEAL_SYMBOL) == _Symbol &&
             (HistoryDealGetInteger(dealTicket, DEAL_TYPE) == DEAL_TYPE_BUY || HistoryDealGetInteger(dealTicket, DEAL_TYPE) == DEAL_TYPE_SELL) &&
             HistoryDealGetInteger(dealTicket, DEAL_ENTRY) == DEAL_ENTRY_OUT) {
             lastProfit = HistoryDealGetDouble(dealTicket, DEAL_PROFIT);
@@ -1082,7 +1012,7 @@ void closeAllTrade() {
         ulong ticket = PositionGetTicket(i);
 
         // Check if the position is for the current symbol
-        if (PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) != _symbol) {
+        if (PositionSelectByTicket(ticket) && PositionGetString(POSITION_SYMBOL) != _Symbol) {
             continue;
         }
 
@@ -1094,7 +1024,7 @@ void closeAllTrade() {
                 last_close_position.buySell = PositionGetInteger(POSITION_TYPE);
                 last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
             }
-            string message = _symbol + " Closed\nPrice: " + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), decimal) + "\nProfit: " + DoubleToString(PositionGetDouble(POSITION_PROFIT), decimal);
+            string message = _Symbol + " Closed\nPrice: " + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), decimal) + "\nProfit: " + DoubleToString(PositionGetDouble(POSITION_PROFIT), decimal);
             SendNotification(message);
             // Print("Close position successfully!");
         }
@@ -1109,7 +1039,7 @@ void updateSLTP(double current_atr) {
         if (!PositionSelectByTicket(position_ticket)) continue;  // Ensure position is selected
 
         string position_symbol = PositionGetString(POSITION_SYMBOL);
-        if (position_symbol != _symbol) continue;  // Skip if not current symbol
+        if (position_symbol != _Symbol) continue;  // Skip if not current symbol
 
         double prev_stop_loss = PositionGetDouble(POSITION_SL);
         double prev_take_profit = PositionGetDouble(POSITION_TP);
@@ -1123,13 +1053,13 @@ void updateSLTP(double current_atr) {
             double new_stop_loss = 0;
             if (trailing_sl) {
                 if (atr_strategy == USE_ATR && atr_sl_multiplier > 0) {
-                    new_stop_loss = NormalizeDouble(RoundToTick(tick.bid - (current_atr * atr_sl_multiplier) - spread), decimal);  // Adjust for bid at exit
+                    new_stop_loss = NormalizeDouble(tick.bid - (current_atr * atr_sl_multiplier) - spread, decimal);
                 } else if (SL > 0) {
-                    new_stop_loss = NormalizeDouble(RoundToTick(tick.bid - SL - spread), decimal);
+                    new_stop_loss = NormalizeDouble(tick.bid - SL - spread, decimal);
                 }
 
                 // Update SL if new SL is higher (tighter) or SL is unset
-                if ((new_stop_loss > prev_stop_loss || prev_stop_loss == 0) && NormalizeDouble(new_stop_loss, decimal) != NormalizeDouble(prev_stop_loss, decimal)) {
+                if (new_stop_loss > prev_stop_loss || prev_stop_loss == 0) {
                     stop_loss = new_stop_loss;
                     modify = true;
                 }
@@ -1138,13 +1068,13 @@ void updateSLTP(double current_atr) {
             double new_take_profit = 0;
             if (trailing_tp) {
                 if (atr_strategy == USE_ATR && atr_tp_multiplier > 0) {
-                    new_take_profit = NormalizeDouble(RoundToTick(tick.ask + (current_atr * atr_tp_multiplier) - spread), decimal);
+                    new_take_profit = NormalizeDouble(tick.ask + (current_atr * atr_tp_multiplier) - spread, decimal);
                 } else if (TP > 0) {
-                    new_take_profit = NormalizeDouble(RoundToTick(tick.ask + TP - spread), decimal);
+                    new_take_profit = NormalizeDouble(tick.ask + TP - spread, decimal);
                 }
 
                 // Update TP if new TP is higher (further) or TP is unset
-                if ((new_take_profit > prev_take_profit || prev_take_profit == 0) && NormalizeDouble(new_take_profit, decimal) != NormalizeDouble(prev_take_profit, decimal)) {
+                if (new_take_profit > prev_take_profit || prev_take_profit == 0) {
                     take_profit = new_take_profit;
                     modify = true;
                 }
@@ -1167,13 +1097,13 @@ void updateSLTP(double current_atr) {
             double new_stop_loss = 0;
             if (trailing_sl) {
                 if (atr_strategy == USE_ATR && atr_sl_multiplier > 0) {
-                    new_stop_loss = NormalizeDouble(RoundToTick(tick.ask + (current_atr * atr_sl_multiplier) + spread), decimal);
+                    new_stop_loss = NormalizeDouble(tick.ask + (current_atr * atr_sl_multiplier) + spread, decimal);
                 } else if (SL > 0) {
-                    new_stop_loss = NormalizeDouble(RoundToTick(tick.ask + SL + spread), decimal);
+                    new_stop_loss = NormalizeDouble(tick.ask + SL + spread, decimal);
                 }
 
                 // Update SL if new SL is lower (tighter) or SL is unset
-                if ((new_stop_loss < prev_stop_loss || prev_stop_loss == 0) && NormalizeDouble(new_stop_loss, decimal) != NormalizeDouble(prev_stop_loss, decimal)) {
+                if (new_stop_loss < prev_stop_loss || prev_stop_loss == 0) {
                     stop_loss = new_stop_loss;
                     modify = true;
                 }
@@ -1182,13 +1112,13 @@ void updateSLTP(double current_atr) {
             double new_take_profit = 0;
             if (trailing_tp) {
                 if (atr_strategy == USE_ATR && atr_tp_multiplier > 0) {
-                    new_take_profit = NormalizeDouble(RoundToTick(tick.bid - (current_atr * atr_tp_multiplier) + spread), decimal);
+                    new_take_profit = NormalizeDouble(tick.bid - (current_atr * atr_tp_multiplier) + spread, decimal);
                 } else if (TP > 0) {
-                    new_take_profit = NormalizeDouble(RoundToTick(tick.bid - TP + spread), decimal);
+                    new_take_profit = NormalizeDouble(tick.bid - TP + spread, decimal);
                 }
 
                 // Update TP if new TP is lower (closer) or TP is unset
-                if ((new_take_profit < prev_take_profit || prev_take_profit == 0) && NormalizeDouble(new_take_profit, decimal) != NormalizeDouble(prev_take_profit, decimal)) {
+                if (new_take_profit < prev_take_profit || prev_take_profit == 0) {
                     take_profit = new_take_profit;
                     modify = true;
                 }
@@ -1254,103 +1184,101 @@ int fixedPercentageVol() {
 //+------------------------------------------------------------------+
 //| Calculate optimal lot size                                       |
 //+------------------------------------------------------------------+
-//+------------------------------------------------------------------+
-//| Calculate optimized volume (lot size) with fractional steps     |
-//+------------------------------------------------------------------+
-double optimizedVol() {
-    // 1) Fetch current price and free margin
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    if (price <= 0 || freeMargin <= 0) {
-        Print("optimizedVol(): invalid price or free margin");
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-    }
+int optimizedVol(void) {
+    double price = 0.0;
+    double margin = 0.0;
 
-    // 2) Compute margin required to open 1.0 lot
-    double marginPerLot = 0.0;
-    if (!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, price, marginPerLot) || marginPerLot <= 0.0) {
-        Print("optimizedVol(): OrderCalcMargin failed, code=", GetLastError());
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-    }
+    //--- select lot size
+    if (!SymbolInfoDouble(_Symbol, SYMBOL_ASK, price))
+        return (0.0);
 
-    // 3) Determine how much margin we're willing to risk
-    double riskMargin = freeMargin * (max_risk / 100.0);
+    if (!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, price, margin))
+        return (0.0);
 
-    // 4) Raw lot calculation
-    double rawLots = riskMargin / marginPerLot;
+    if (margin <= 0.0)
+        return (0.0);
 
-    // 5) Apply consecutive‑loss penalty if configured
+    double volume = NormalizeDouble(AccountInfoDouble(ACCOUNT_MARGIN_FREE) * max_risk / margin, 2);
+
+    //--- calculate number of losses orders without a break
     if (decrease_factor > 0) {
+        //--- select history for access
         HistorySelect(0, TimeCurrent());
-        int totalDeals = HistoryDealsTotal();
-        int losses = 0;
-        for (int i = totalDeals - 1; i >= 0; --i) {
+        //---
+        int orders = HistoryDealsTotal();  // total history deals
+        int losses = 0;                    // number of losses orders without a break
+
+        for (int i = orders - 1; i >= 0; i--) {
             ulong ticket = HistoryDealGetTicket(i);
-            if (ticket == 0) break;
-            if (HistoryDealGetString(ticket, DEAL_SYMBOL) != _symbol) continue;
+
+            if (ticket == 0) {
+                // Print("HistoryDealGetTicket failed, no trade history");
+                break;
+            }
+
+            //--- check symbol
+            if (HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol)
+                continue;
+
+            //--- check profit
             double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-            if (profit > 0.0) break;
-            if (profit < 0.0) losses++;
+
+            if (profit > 0.0)
+                break;
+
+            if (profit < 0.0)
+                losses++;
         }
+
         if (losses > 1)
-            rawLots -= rawLots * losses / decrease_factor;
+            volume = NormalizeDouble(volume - volume * losses / decrease_factor, 1);
     }
 
-    // 7) Floor to nearest step and clamp
-    double flooredLots = stepVol * MathFloor(rawLots / stepVol);
-    double clippedLots = MathMax(minVol, MathMin(maxVol, flooredLots));
+    //--- normalize and check limits
+    double stepvol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
+    volume = stepvol * NormalizeDouble(volume / stepvol, 0);
+    volume = NormalizeDouble(volume * 0.01 / 2, 2);
 
-    // 8) Determine decimal precision from stepVol (e.g. 0.01 → 2 decimals)
-    int precision = 0;
-    if (stepVol < 1.0)
-        precision = (int)MathRound(-MathLog10(stepVol));
+    double minvol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN);
 
-    // 9) Normalize final lot size
-    double finalLots = NormalizeDouble(clippedLots, precision);
+    if (volume < minvol)
+        volume = minvol;
 
-    // 10) Debug print
-    PrintFormat(
-        "optimizedVol → Price=%.5f  FreeM=%.2f  Risk%%=%d  Margin/Lot=%.2f  "
-        "RawLots=%.4f  FinalLots=%.2f  Step=%.4f",
-        price, freeMargin, max_risk, marginPerLot, rawLots, finalLots, stepVol);
+    double maxvol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
 
-    return (finalLots);
+    if (volume > maxvol)
+        volume = maxvol;
+
+    // Print("Optimized Volume: ", volume);
+    return (int)volume;
 }
 
-double boostVol() {
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+int boostVol(void) {
+    double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+    double contract_price = cur_price * (contract_size / 10);
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
 
-    int minRisk = 10;  // Minimum risk percentage (1%)
+    int minRisk = 10;
 
-    double rawRiskPct = (boost_target / balance) * minRisk;  // = sqrt((bt/b)^2)*minRisk
-    double riskPct = MathMin(rawRiskPct, 100.0);             // cap at 100%
+    double risk = MathMin(MathSqrt(MathPow(boost_target, 2) / MathPow(balance, 2)) * minRisk, 100);
+    double volume = equity * (risk / 100) / contract_price;
 
-    double riskMargin = freeMargin * (riskPct / 100.0);
+    // printf("Risk: %.2f", risk);
+    // printf("Volume: %.2f", volume);
 
-    double marginPerLot = SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL);
-    if (!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, price, marginPerLot) || marginPerLot <= 0.0) {
-        Print("boostVol(): failed to calculate margin per lot, code=", GetLastError());
-        Print("Margin per lot: ", marginPerLot, " for price: ", price);
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
+    double min_vol = 1;
+    double max_vol = 300;
+
+    if (volume < min_vol) {
+        volume = min_vol;
+    } else if (volume > max_vol) {
+        volume = max_vol;
     }
 
-    double rawLots = riskMargin / marginPerLot;
-    double flooredLots = stepVol * MathFloor(rawLots / stepVol);
-    double clamped = MathMax(minVol, MathMin(maxVol, flooredLots));
+    // Print("Boost Volume: ", volume);
 
-    int precision = 0;
-    if (stepVol < 1.0)
-        precision = (int)MathRound(-MathLog10(stepVol));
-
-    double finalLots = NormalizeDouble(clamped, precision);
-
-    PrintFormat(
-        "boostVol → Bal=%.2f FreeM=%.2f Risk%%=%.2f%% RiskM=%.2f M/Lot=%.2f Raw=%.4f Final=%.2f (step=%.4f)",
-        balance, freeMargin, riskPct, riskMargin, marginPerLot, rawLots, finalLots, stepVol);
-
-    return (finalLots);
+    return int(volume);
 }
 
 double OnTester() {
