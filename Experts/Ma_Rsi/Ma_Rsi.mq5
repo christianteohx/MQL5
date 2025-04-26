@@ -58,11 +58,10 @@ enum TEST_CRITERION {
     WIN_RATE,
     WIN_RATE_PROFIT,
     CUSTOMIZED_MAX,
-    SMALL_TRADES,
-    BIG_TRADES,
     BALANCE_DRAWDOWN,
     BALANCExRECOVERYxSHARPE,
     HIGH_GROWTH,
+    HIGH_GROWTH_LOW_DRAWDOWN,
     NONE,
 };
 
@@ -1218,8 +1217,6 @@ double getVolume() {
     if (boost == true && boost_target > 0) {
         if (ACCOUNT_BALANCE < boost_target) {
             return boostVol();
-        } else {
-            return optimizedVol();
         }
     }
 
@@ -1232,23 +1229,29 @@ double getVolume() {
     }
 }
 
-int fixedPercentageVol() {
-    double cur_price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-    double contract_price = cur_price * (contract_size / 10) / 3.67;
-    double free_margin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    double risk = max_risk;
-    double volume = free_margin * (risk / 100) / contract_price;
+double fixedPercentageVol() {
+    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    double riskMargin = freeMargin * (max_risk / 100.0);
 
-    double min_vol = 0.01;
-    double max_vol = 300;
+    double marginPerLot = AccountInfoDouble(ACCOUNT_MARGIN_INITIAL);
 
-    if (volume < min_vol) {
-        volume = min_vol;
-    } else if (volume > max_vol) {
-        volume = max_vol;
-    }
+    double volume = riskMargin / marginPerLot;
+    double flooredLots = stepVol * MathFloor(volume / stepVol);
+    double clamped = MathMax(minVol, MathMin(maxVol, flooredLots));
 
-    return (int)volume;
+    int precision = 0;
+    if (stepVol < 1.0)
+        precision = (int)MathRound(-MathLog10(stepVol));
+
+    double finalLots = NormalizeDouble(clamped, precision);
+
+    if (finalLots < minVol) finalLots = minVol;
+
+    PrintFormat(
+        "fixedPercentageVol → FreeM=%.2f Risk%%=%d RiskM=%.2f M/Lot=%.2f Raw=%.4f Final=%.2f (step=%.4f)",
+        freeMargin, max_risk, riskMargin, marginPerLot, volume, finalLots, stepVol);
+
+    return finalLots;
 }
 
 //+------------------------------------------------------------------+
@@ -1322,7 +1325,7 @@ double boostVol() {
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
     double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
 
-    int minRisk = 10;  // Minimum risk percentage (1%)
+    int minRisk = 50;  // Minimum risk percentage (1%)
 
     double rawRiskPct = (boost_target / balance) * minRisk;  // = sqrt((bt/b)^2)*minRisk
     double riskPct = MathMin(rawRiskPct, 100.0);             // cap at 100%
@@ -1378,6 +1381,8 @@ double OnTester() {
         score = -TesterStatistics(STAT_BALANCEDD_PERCENT);
     } else if (test_criterion == HIGH_GROWTH) {
         score = highGrowth();
+    } else if (test_criterion == HIGH_GROWTH_LOW_DRAWDOWN) {
+        score = highGrowthLowDrawdown();
     } else if (test_criterion == NONE) {
         score = none();
     }
@@ -1406,6 +1411,35 @@ double highGrowth() {
     if (netProfit < 0) {
         score *= 0.1;  // Reduce score significantly for losing strategies
     }
+
+    return score;
+}
+
+double highGrowthLowDrawdown() {
+
+    double netProfit = TesterStatistics(STAT_PROFIT);         // Total net profit
+    double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);    // Max equity drawdown
+    double trades = TesterStatistics(STAT_TRADES);            // Number of trades
+    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT); // Total gross profit
+    double grossLoss = TesterStatistics(STAT_GROSS_LOSS);     // Total gross loss (negative)
+    
+    double contractFee = 2.00;      // Example: $1.37 per trade
+    double minProfitPerTrade = 3.0; // Minimum profit required to be "healthy"
+
+    // Avoid division by zero
+    if (trades < 1) return -1.0;
+
+    double avgProfitPerTrade = (grossProfit + grossLoss) / trades;
+
+    // Penalize if the average profit per trade is too small
+    if (avgProfitPerTrade < minProfitPerTrade)
+        return -1.0 * (minProfitPerTrade - avgProfitPerTrade);  // Negative bad score
+
+    if (maxDrawdown <= 0)
+        maxDrawdown = 1; // Avoid divide by zero
+
+    // Base score: high profit, low drawdown
+    double score = (netProfit / maxDrawdown) * avgProfitPerTrade;
 
     return score;
 }
