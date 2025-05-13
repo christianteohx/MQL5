@@ -1,9 +1,9 @@
 //+------------------------------------------------------------------+
 //|                                           MurreyMath Channel.mq5 |
-//|                              Copyright 2009-2024, MetaQuotes Ltd |
+//|                              Copyright 2009-2025, MetaQuotes Ltd |
 //|                                             https://www.mql5.com |
 //+------------------------------------------------------------------+
-#property copyright   "2009-2024, MetaQuotes Ltd"
+#property copyright   "2009-2025, MetaQuotes Ltd"
 #property link        "http://www.mql5.com"
 #property description "Murrey Math Channels based on https://www.mql5.com/ru/code/8157"
 #property description "Author of calculations is Vladyslav Goshkov (https://www.mql5.com/en/users/vladislavvg)"
