@@ -228,52 +228,52 @@ int OnInit() {
    maxVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    stepVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   if (ma_strategy == SINGLE_MA) {
-      if (first_ema_period < 1) {
-         Alert("Invalid EMA period");
+   // if (ma_strategy == SINGLE_MA) {
+   //    if (first_ema_period < 1) {
+   //       Alert("Invalid EMA period");
 
-         return INIT_FAILED;
-      }
-   } else if (ma_strategy == DOUBLE_MA) {
-      if (first_ema_period >= second_ema_period) {
-         Alert("Invalid Double EMA period");
+   //       return INIT_FAILED;
+   //    }
+   // } else if (ma_strategy == DOUBLE_MA) {
+   //    if (first_ema_period >= second_ema_period) {
+   //       Alert("Invalid Double EMA period");
 
-         return INIT_FAILED;
-      }
-   } else if (ma_strategy == TRIPLE_MA) {
-      if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
-         Alert("Invalid Triple EMA period");
-         return INIT_FAILED;
-      }
-   }
+   //       return INIT_FAILED;
+   //    }
+   // } else if (ma_strategy == TRIPLE_MA) {
+   //    if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
+   //       Alert("Invalid Triple EMA period");
+   //       return INIT_FAILED;
+   //    }
+   // }
 
-   if (rsi_strategy != NO_RSI) {
-      if (rsi_overbought < rsi_oversold) {
-         Alert("Invalid RSI levels");
-         return INIT_FAILED;
-      }
-   }
+   // if (rsi_strategy != NO_RSI) {
+   //    if (rsi_overbought < rsi_oversold) {
+   //       Alert("Invalid RSI levels");
+   //       return INIT_FAILED;
+   //    }
+   // }
 
-   if (macd_strategy != NO_MACD) {
-      if (macd_fast >= macd_slow) {
-         Alert("Invalid MACD levels");
-         return INIT_FAILED;
-      }
-   }
+   // if (macd_strategy != NO_MACD) {
+   //    if (macd_fast >= macd_slow) {
+   //       Alert("Invalid MACD levels");
+   //       return INIT_FAILED;
+   //    }
+   // }
 
-   if (adx_strategy != NO_ADX) {
-      if (adx_period < 1) {
-         Alert("Invalid ADX period");
-         return INIT_FAILED;
-      }
-   }
+   // if (adx_strategy != NO_ADX) {
+   //    if (adx_period < 1) {
+   //       Alert("Invalid ADX period");
+   //       return INIT_FAILED;
+   //    }
+   // }
 
-   if (atr_strategy == USE_ATR) {
-      if (atr_period < 1) {
-         Alert("Invalid ATR period");
-         return INIT_FAILED;
-      }
-   }
+   // if (atr_strategy == USE_ATR) {
+   //    if (atr_period < 1) {
+   //       Alert("Invalid ATR period");
+   //       return INIT_FAILED;
+   //    }
+   // }
 
    if (trade_criteria == CONFIDENCE || trade_criteria == BOTH) {
       use_threshold = true;  // Use threshold for confidence or both criteria
@@ -936,9 +936,9 @@ void OnTick() {
       updateSLTP(current_atr);
    }
 
-   if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL))) {
-      ExpertRemove();
-   }
+   // if (AccountInfoDouble(ACCOUNT_BALANCE) < (SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL))) {
+   //    ExpertRemove();
+   // }
 }
 
 //+------------------------------------------------------------------+
@@ -1586,13 +1586,13 @@ double highGrowth() {
 }
 
 double highGrowthLowDrawdown() {
-   double netProfit = TesterStatistics(STAT_PROFIT);  // Total net profit
-   double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);  // Max equity drawdown
-   double trades = TesterStatistics(STAT_TRADES);  // Number of trades
+   double netProfit = TesterStatistics(STAT_PROFIT);          // Total net profit
+   double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);     // Max equity drawdown
+   double trades = TesterStatistics(STAT_TRADES);             // Number of trades
    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT);  // Total gross profit
-   double grossLoss = TesterStatistics(STAT_GROSS_LOSS);  // Total gross loss (negative)
+   double grossLoss = TesterStatistics(STAT_GROSS_LOSS);      // Total gross loss (negative)
 
-   double contractFee = 2.00;  // Example: $1.37 per trade
+   double contractFee = 2.00;       // Example: $1.37 per trade
    double minProfitPerTrade = 3.0;  // Minimum profit required to be "healthy"
 
    // Avoid division by zero
@@ -1673,12 +1673,12 @@ double GetBalanceRecoverySharpeRatio() {
 }
 
 double customized_max() {
-   double netProfit = TesterStatistics(STAT_PROFIT);  // Net profit
-   double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);  // Maximum equity drawdown
+   double netProfit = TesterStatistics(STAT_PROFIT);          // Net profit
+   double maxDrawdown = TesterStatistics(STAT_EQUITY_DD);     // Maximum equity drawdown
    double grossProfit = TesterStatistics(STAT_GROSS_PROFIT);  // Gross profit
-   double grossLoss = TesterStatistics(STAT_GROSS_LOSS);  // Gross loss
-   double totalTrades = TesterStatistics(STAT_TRADES);  // Total number of trades
-   double wonTrades = TesterStatistics(STAT_PROFIT_TRADES);  // Number of winning trades
+   double grossLoss = TesterStatistics(STAT_GROSS_LOSS);      // Gross loss
+   double totalTrades = TesterStatistics(STAT_TRADES);        // Total number of trades
+   double wonTrades = TesterStatistics(STAT_PROFIT_TRADES);   // Number of winning trades
 
    netProfit = netProfit - (price_per_contract * totalTrades);  // Adjust net profit by subtracting total cost
 
@@ -1705,22 +1705,22 @@ double customized_max() {
 }
 
 double none() {
-   double netProfit = TesterStatistics(STAT_PROFIT);  // Net Profit
+   double netProfit = TesterStatistics(STAT_PROFIT);                // Net Profit
    double maxDrawdown = TesterStatistics(STAT_EQUITY_DD_RELATIVE);  // Maximum Drawdown
-   double profitFactor = TesterStatistics(STAT_PROFIT_FACTOR);  // Profit Factor
-   double sharpeRatio = TesterStatistics(STAT_SHARPE_RATIO);  // Sharpe Ratio
+   double profitFactor = TesterStatistics(STAT_PROFIT_FACTOR);      // Profit Factor
+   double sharpeRatio = TesterStatistics(STAT_SHARPE_RATIO);        // Sharpe Ratio
    double recoveryFactor = TesterStatistics(STAT_RECOVERY_FACTOR);  // Recovery Factor
-   double totalTrades = TesterStatistics(STAT_TRADES);  // Total Number of Trades
+   double totalTrades = TesterStatistics(STAT_TRADES);              // Total Number of Trades
 
    netProfit = netProfit - (price_per_contract * totalTrades);  // Adjust net profit by subtracting total cost
 
    // Weights based on importance
-   double netProfitWeight = 0.45;  // 45% weight for Net Profit
-   double maxDrawdownWeight = 0.25;  // 25% weight for Maximum Drawdown
-   double profitFactorWeight = 0.12;  // 12% weight for Profit Factor
-   double sharpeRatioWeight = 0.08;  // 8% weight for Sharpe Ratio
+   double netProfitWeight = 0.45;       // 45% weight for Net Profit
+   double maxDrawdownWeight = 0.25;     // 25% weight for Maximum Drawdown
+   double profitFactorWeight = 0.12;    // 12% weight for Profit Factor
+   double sharpeRatioWeight = 0.08;     // 8% weight for Sharpe Ratio
    double recoveryFactorWeight = 0.05;  // 5% weight for Recovery Factor
-   double totalTradesWeight = 0.05;  // 5% weight for Total Trades
+   double totalTradesWeight = 0.05;     // 5% weight for Total Trades
 
    // Score calculation: higher scores should indicate better performance
    double score = (netProfit * netProfitWeight) - (maxDrawdown * maxDrawdownWeight)  // Subtract drawdown (smaller is better)
