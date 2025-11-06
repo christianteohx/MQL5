@@ -329,7 +329,7 @@ public:
             array[i][0] = data[i][0];
             array[i][1] = (V)i;
          }
-         ArraySort(array);
+         ::ArraySort(array);
          ulong temp[];
          V array2d[];
          // make a flat copy of original array and then
