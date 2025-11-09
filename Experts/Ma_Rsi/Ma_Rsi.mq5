@@ -228,54 +228,54 @@ int OnInit() {
    maxVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    stepVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
-   // if (ma_strategy == SINGLE_MA) {
-   //    if (first_ema_period < 1) {
-   //       Alert("Invalid EMA period");
+   if (ma_strategy == SINGLE_MA) {
+      if (first_ema_period < 1) {
+         Alert("Invalid EMA period");
 
-   //       return INIT_FAILED;
-   //    }
-   // } else if (ma_strategy == DOUBLE_MA) {
-   //    if (first_ema_period >= second_ema_period) {
-   //       Alert("Invalid Double EMA period");
+         return INIT_FAILED;
+      }
+   } else if (ma_strategy == DOUBLE_MA) {
+      if (first_ema_period >= second_ema_period) {
+         Alert("Invalid Double EMA period");
 
-   //       return INIT_FAILED;
-   //    }
-   // } else if (ma_strategy == TRIPLE_MA) {
-   //    if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
-   //       Alert("Invalid Triple EMA period");
-   //       return INIT_FAILED;
-   //    }
-   // }
+         return INIT_FAILED;
+      }
+   } else if (ma_strategy == TRIPLE_MA) {
+      if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
+         Alert("Invalid Triple EMA period");
+         return INIT_FAILED;
+      }
+   }
 
-   // if (rsi_strategy != NO_RSI) {
-   //    if (rsi_overbought < rsi_oversold) {
-   //       Alert("Invalid RSI levels");
-   //       return INIT_FAILED;
-   //    }
-   // }
+   if (rsi_strategy != NO_RSI) {
+      if (rsi_overbought <= rsi_oversold) {
+         Alert("Invalid RSI levels");
+         return INIT_FAILED;
+      }
+   }
 
-   // if (macd_strategy != NO_MACD) {
-   //    if (macd_fast >= macd_slow) {
-   //       Alert("Invalid MACD levels");
-   //       return INIT_FAILED;
-   //    }
-   // }
+   if (macd_strategy != NO_MACD) {
+      if (macd_fast >= macd_slow) {
+         Alert("Invalid MACD levels");
+         return INIT_FAILED;
+      }
+   }
 
-   // if (adx_strategy != NO_ADX) {
-   //    if (adx_period < 1) {
-   //       Alert("Invalid ADX period");
-   //       return INIT_FAILED;
-   //    }
-   // }
+   if (adx_strategy != NO_ADX) {
+      if (adx_period < 1) {
+         Alert("Invalid ADX period");
+         return INIT_FAILED;
+      }
+   }
 
-   // if (atr_strategy == USE_ATR) {
-   //    if (atr_period < 1) {
-   //       Alert("Invalid ATR period");
-   //       return INIT_FAILED;
-   //    }
-   // }
+   if (atr_strategy == USE_ATR) {
+      if (atr_period < 1) {
+         Alert("Invalid ATR period");
+         return INIT_FAILED;
+      }
+   }
 
-   if (trade_criteria == CONFIDENCE || trade_criteria == BOTH) {
+   if ((trade_criteria == CONFIDENCE || trade_criteria == BOTH) && (buy_threshold > 0 && sell_threshold > 0)) {
       use_threshold = true;  // Use threshold for confidence or both criteria
    }
 
@@ -321,10 +321,10 @@ int OnInit() {
    //     totalWeight += atr_weight;
    // }
 
-   // if (totalWeight != 1.0) {
-   //     Alert("Total weight exceeds 1.0, please adjust weights accordingly.");
-   //     return INIT_FAILED;
-   // }
+   if (use_threshold && totalWeight > 1.0) {
+       Alert("Total weight exceeds 1.0, please adjust weights accordingly.");
+       return INIT_FAILED;
+   }
 
    // Normalize weights for active indicators
    if (ma_strategy != NO_MA) {
