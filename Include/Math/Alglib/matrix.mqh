@@ -428,6 +428,7 @@ private:
 public:
    //--- constructor, destructor
                      CRowComplex(void) {}
+                     CRowComplex(const complex &array[]) { *this=array; }
                     ~CRowComplex(void) {}
 
    //--- methods
