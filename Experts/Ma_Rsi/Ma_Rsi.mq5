@@ -45,6 +45,11 @@ enum ATR {
     USE_ATR,
 };
 
+enum BB {
+    NO_BB,
+    USE_BB,
+};
+
 enum RISK_MANAGEMENT {
     OPTIMIZED,
     FIXED_PERCENTAGE,
@@ -76,6 +81,7 @@ enum TRADE_CRITERIA {
 sinput string strategy_string;                   //-----------------Strategy-----------------
 input TRADE_CRITERIA trade_criteria = CONDITION; // Trade criteria for strategy
 input MA ma_strategy = TRIPLE_MA;
+input BB bb_strategy = USE_BB;
 input RSI rsi_strategy = LIMIT;
 input MACD macd_strategy = HIST;
 input ADX adx_strategy = USE_ADX;
@@ -87,6 +93,11 @@ input int first_ema_period = 13;     // first EMA period
 input int second_ema_period = 48;    // second EMA period
 input int third_ema_period = 200;    // third EMA period
 input double weightMA = 0.4;         // Weight for MA strategy
+
+sinput string bb_string;                      //-----------------Bollinger Bands-----------------
+input int bb_period = 20;               // BB period
+input double bb_deviation = 2.0;       // BB deviation
+input double weightBB = 0.1;         // Weight for BB strategy
 
 sinput string rsi_string;      //-----------------RSI-----------------
 input int rsi_period = 14;     // RSI period
@@ -152,6 +163,11 @@ double second_ema_buffer[]; // Buffer second EMA
 int third_ema_handle;      // Handle third EMA
 double third_ema_buffer[]; // Buffer third EMA
 
+int bb_handle;             // Handle Bollinger Bands
+double bb_upper_buffer[];  // Buffer BB Upper
+double bb_middle_buffer[]; // Buffer BB Middle
+double bb_lower_buffer[];  // Buffer BB Lower
+
 int rsi_handle;      // Handle RSI
 double rsi_buffer[]; // Buffer RSI
 
@@ -172,7 +188,7 @@ double atr_buffer[];     // Buffer ATR
 
 ulong magic_number = 50357114; // Magic number (changed to ulong to avoid overflow)
 double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-int decimal = SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);              // Decimal
+int decimal = (int)(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));              // Decimal
 double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE); // Tick size
 
 bool was_market_open = false;   // Variable to track market open state
@@ -247,6 +263,13 @@ int OnInit() {
         }
     }
 
+    if (bb_strategy == USE_BB) {
+        if (bb_period < 1 || bb_deviation <= 0) {
+            Alert("Invalid BB parameters");
+            return INIT_FAILED;
+        }
+    }
+
     if (rsi_strategy != NO_RSI) {
         if (rsi_overbought <= rsi_oversold) {
             Alert("Invalid RSI levels");
@@ -287,14 +310,16 @@ int OnInit() {
     second_ema_handle = iCustom(_Symbol, Period(), "Examples/Custom Moving Average", second_ema_period, 0, MODE_EMA, clrBlue, PRICE_CLOSE);
     third_ema_handle = iCustom(_Symbol, Period(), "Examples/Custom Moving Average", third_ema_period, 0, MODE_EMA, clrGreen, PRICE_CLOSE);
 
+    bb_handle = iBands(_Symbol, _Period, bb_period, 0, bb_deviation, PRICE_CLOSE);
+
     rsi_handle = iRSI(_Symbol, _Period, rsi_period, PRICE_CLOSE);
     macd_handle = iMACD(_Symbol, _Period, macd_fast, macd_slow, macd_period, PRICE_CLOSE);
     adx_handle = iADX(_Symbol, _Period, adx_period);
     atr_handle = iATR(_Symbol, _Period, atr_period); // Initialize ATR handle
 
     // Check if the indicators were created successfully
-    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE ||
-        rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE ||
+    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || 
+        bb_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE ||
         (atr_strategy == USE_ATR && atr_handle == INVALID_HANDLE)) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
         return INIT_FAILED;
@@ -303,6 +328,10 @@ int OnInit() {
     // Check active indicators and sum their weights
     if (ma_strategy != NO_MA) {
         totalWeight += weightMA;
+    }
+
+    if (bb_strategy != NO_BB) {
+        totalWeight += weightBB;
     }
 
     if (rsi_strategy != NO_RSI) {
@@ -321,7 +350,7 @@ int OnInit() {
     //     totalWeight += atr_weight;
     // }
 
-    if (use_threshold && totalWeight > 1.0) {
+    if (use_threshold && totalWeight != 1.0) {
         Alert("Total weight exceeds 1.0, please adjust weights accordingly.");
         return INIT_FAILED;
     }
@@ -356,6 +385,7 @@ int OnInit() {
     ChartIndicatorAdd(0, 0, first_ema_handle);
     ChartIndicatorAdd(0, 0, second_ema_handle);
     ChartIndicatorAdd(0, 0, third_ema_handle);
+    ChartIndicatorAdd(0, 0, bb_handle);
     ChartIndicatorAdd(0, 1, rsi_handle);
     ChartIndicatorAdd(0, 2, macd_handle);
     ChartIndicatorAdd(0, 3, adx_handle);
@@ -364,12 +394,15 @@ int OnInit() {
     SetIndexBuffer(0, first_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(2, third_ema_buffer, INDICATOR_DATA);
-    SetIndexBuffer(3, rsi_buffer, INDICATOR_DATA);
-    SetIndexBuffer(4, macd_main_buffer, INDICATOR_DATA);
-    SetIndexBuffer(5, macd_signal_buffer, INDICATOR_DATA);
-    SetIndexBuffer(6, adx_buffer, INDICATOR_DATA);
-    SetIndexBuffer(7, DI_plusBuffer, INDICATOR_DATA);
-    SetIndexBuffer(8, DI_minusBuffer, INDICATOR_DATA);
+    SetIndexBuffer(3, bb_upper_buffer, INDICATOR_DATA);
+    SetIndexBuffer(4, bb_middle_buffer, INDICATOR_DATA);
+    SetIndexBuffer(5, bb_lower_buffer, INDICATOR_DATA);
+    SetIndexBuffer(6, rsi_buffer, INDICATOR_DATA);
+    SetIndexBuffer(7, macd_main_buffer, INDICATOR_DATA);
+    SetIndexBuffer(8, macd_signal_buffer, INDICATOR_DATA);
+    SetIndexBuffer(9, adx_buffer, INDICATOR_DATA);
+    SetIndexBuffer(10, DI_plusBuffer, INDICATOR_DATA);
+    SetIndexBuffer(11, DI_minusBuffer, INDICATOR_DATA);
 
     const string message = _symbol + " Expert Advisor started!";
     SendNotification(message);
@@ -386,6 +419,7 @@ void OnDeinit(const int reason) {
     IndicatorRelease(first_ema_handle);
     IndicatorRelease(second_ema_handle);
     IndicatorRelease(third_ema_handle);
+    IndicatorRelease(bb_handle);
     IndicatorRelease(rsi_handle);
     IndicatorRelease(macd_handle);
     IndicatorRelease(adx_handle);
@@ -408,9 +442,7 @@ bool IsTradingTime() {
 //| Check for open position direction                                |
 //+------------------------------------------------------------------+
 
-bool HasBuyPosition()
-
-{
+bool HasBuyPosition() {
     for (int i = 0; i < PositionsTotal(); i++) {
         ulong ticket = PositionGetTicket(i);
         if (PositionSelectByTicket(ticket)) {
@@ -446,6 +478,8 @@ void OnTick() {
     //     Print("Trading is not allowed on this terminal.");
     // }
 
+    // skip to end if weight > 1
+
     reasoning = ""; // Reset reasoning at the start of each tick
     buy_confidence = 0.0;
     sell_confidence = 0.0;
@@ -472,6 +506,9 @@ void OnTick() {
     if (CopyBuffer(first_ema_handle, 0, 0, 4, first_ema_buffer) < 4 ||
         CopyBuffer(second_ema_handle, 0, 0, 4, second_ema_buffer) < 4 ||
         CopyBuffer(third_ema_handle, 0, 0, 4, third_ema_buffer) < 4 ||
+        CopyBuffer(bb_handle, 0, 0, 4, bb_middle_buffer) < 4 ||
+        CopyBuffer(bb_handle, 1, 0, 4, bb_upper_buffer) < 4 ||
+        CopyBuffer(bb_handle, 2, 0, 4, bb_lower_buffer) < 4 ||
         CopyBuffer(rsi_handle, 0, 0, 4, rsi_buffer) < 4 ||
         CopyBuffer(macd_handle, 0, 0, 4, macd_main_buffer) < 4 ||
         CopyBuffer(macd_handle, 1, 0, 4, macd_signal_buffer) < 4 ||
@@ -496,6 +533,9 @@ void OnTick() {
     ArraySetAsSeries(first_ema_buffer, true);
     ArraySetAsSeries(second_ema_buffer, true);
     ArraySetAsSeries(third_ema_buffer, true);
+    ArraySetAsSeries(bb_upper_buffer, true);
+    ArraySetAsSeries(bb_middle_buffer, true);
+    ArraySetAsSeries(bb_lower_buffer, true);
     ArraySetAsSeries(rsi_buffer, true);
     ArraySetAsSeries(macd_main_buffer, true);
     ArraySetAsSeries(macd_signal_buffer, true);
@@ -510,6 +550,7 @@ void OnTick() {
     }
 
     double confidenceMA = 0.0;
+    double confidenceBB = 0.0;
     double confidenceRSI = 0.0;
     double confidenceMACD = 0.0;
     double confidenceADX = 0.0;
@@ -519,6 +560,7 @@ void OnTick() {
     bool buy_double_ma = first_ema_buffer[0] > second_ema_buffer[0] && first_ema_buffer[2] < second_ema_buffer[2];
     bool buy_triple_ma = first_ema_buffer[0] > third_ema_buffer[0] && second_ema_buffer[0] > third_ema_buffer[0];
 
+    bool buy_bb = true;
     bool buy_rsi = true;
     bool buy_macd = true;
     bool buy_adx = true;
@@ -528,6 +570,7 @@ void OnTick() {
     bool sell_double_ma = first_ema_buffer[0] < second_ema_buffer[0] && first_ema_buffer[2] > second_ema_buffer[2];
     bool sell_triple_ma = first_ema_buffer[0] < third_ema_buffer[0] && second_ema_buffer[0] < third_ema_buffer[0];
 
+    bool sell_bb = true;
     bool sell_rsi = true;
     bool sell_macd = true;
     bool sell_adx = true;
@@ -628,6 +671,19 @@ void OnTick() {
             reasoning += StringFormat(" (Confidence: %.2f)\n", confidenceMA);
         } else if (Sell) {
             reasoning += StringFormat(" (Confidence: %.2f)\n", -confidenceMA);
+        }
+    }
+
+    if (bb_strategy == USE_BB) {
+        buy_bb = candle[1].close < bb_lower_buffer[1] && candle[0].close > bb_lower_buffer[0];
+        sell_bb = candle[1].close > bb_upper_buffer[1] && candle[0].close < bb_upper_buffer[0];
+
+        confidenceBB = buy_bb ? 1.0 : (sell_bb ? -1.0 : 0.0);
+
+        if (buy_bb) {
+            reasoning += StringFormat("BB: Price crosses above lower band (Confidence: %.2f)\n", confidenceBB);
+        } else if (sell_bb) {
+            reasoning += StringFormat("BB: Price crosses below upper band (Confidence: %.2f)\n", -confidenceBB);
         }
     }
 
@@ -892,9 +948,6 @@ void OnTick() {
 
         // Execute the trade based on the determined direction
         if (shouldBuy && !hasBuy) {
-            // if (shouldBuy) {
-            // closeAllTrade();  // Ensure no other positions exist
-
             const string message = StringFormat("Buy Signal for %s\nBuy Confidence: %.2f\nReasoning:\n%s", _symbol, buy_confidence, reasoning);
 
             if (print_debug) {
@@ -909,10 +962,6 @@ void OnTick() {
             reasoning = ""; // Reset reasoning after trade
 
         } else if (shouldSell && !hasSell) {
-            // } else if (shouldSell) {
-
-            // closeAllTrade();  // Ensure no other positions exist
-
             const string message = StringFormat("Sell Signal for %s\nSell Confidence: %.2f\nReasoning:\n%s", _symbol, sell_confidence, reasoning);
 
             if (print_debug) {
@@ -943,7 +992,7 @@ void OnTick() {
 
 //+------------------------------------------------------------------+
 //| Useful functions                                                 |
-//+------------------------------------------------------------------
+//+------------------------------------------------------------------+
 
 //--- for bar change
 bool isNewBar() {
@@ -1212,7 +1261,7 @@ void closeAllTrade() {
                   ". Code description: ", ExtTrade.ResultRetcodeDescription());
         } else {
             if (PositionGetDouble(POSITION_PROFIT) > 0) {
-                last_close_position.buySell = PositionGetInteger(POSITION_TYPE);
+                last_close_position.buySell = (int)PositionGetInteger(POSITION_TYPE);
                 last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
             }
 
@@ -1357,7 +1406,7 @@ double getVolume() {
     }
 
     if (boost == true && boost_target > 0) {
-        if (ACCOUNT_BALANCE < boost_target) {
+        if (AccountInfoDouble(ACCOUNT_BALANCE) < boost_target) {
             return boostVol();
         }
     }
