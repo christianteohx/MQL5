@@ -205,6 +205,8 @@ double sell_confidence = 0.0; // Confidence for sell signal
 bool shouldBuy = false;
 bool shouldSell = false;
 
+bool skip = false;
+
 MqlRates candle[]; // Variable for storing candles
 MqlTick tick;      // Variable for storing ticks
 CTrade ExtTrade;
@@ -248,53 +250,53 @@ int OnInit() {
         if (first_ema_period < 1) {
             Alert("Invalid EMA period");
 
-            return INIT_FAILED;
+            skip = true;
         }
     } else if (ma_strategy == DOUBLE_MA) {
         if (first_ema_period >= second_ema_period) {
             Alert("Invalid Double EMA period");
 
-            return INIT_FAILED;
+            skip = true;
         }
     } else if (ma_strategy == TRIPLE_MA) {
         if (first_ema_period >= second_ema_period || second_ema_period >= third_ema_period) {
             Alert("Invalid Triple EMA period");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
     if (bb_strategy == USE_BB) {
         if (bb_period < 1 || bb_deviation <= 0) {
             Alert("Invalid BB parameters");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
     if (rsi_strategy != NO_RSI) {
         if (rsi_overbought <= rsi_oversold) {
             Alert("Invalid RSI levels");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
     if (macd_strategy != NO_MACD) {
         if (macd_fast >= macd_slow) {
             Alert("Invalid MACD levels");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
     if (adx_strategy != NO_ADX) {
         if (adx_period < 1) {
             Alert("Invalid ADX period");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
     if (atr_strategy == USE_ATR) {
         if (atr_period < 1) {
             Alert("Invalid ATR period");
-            return INIT_FAILED;
+            skip = true;
         }
     }
 
@@ -328,31 +330,43 @@ int OnInit() {
     // Check active indicators and sum their weights
     if (ma_strategy != NO_MA) {
         totalWeight += weightMA;
+    } else if (ma_strategy == NO_MA && weightMA > 0.1) {
+        skip = true;        
     }
 
     if (bb_strategy != NO_BB) {
         totalWeight += weightBB;
+    } else if (bb_strategy == NO_BB && weightBB > 0.1) {
+        skip = true;        
     }
 
     if (rsi_strategy != NO_RSI) {
         totalWeight += weightRSI;
+    } else if (rsi_strategy == NO_RSI && weightRSI > 0.1) {
+        skip = true;        
     }
 
     if (macd_strategy != NO_MACD) {
         totalWeight += weightMACD;
+    } else if (macd_strategy == NO_MACD && weightMACD > 0.1) {
+        skip = true;        
     }
 
     if (adx_strategy != NO_ADX) {
         totalWeight += weightADX;
+    } else if (adx_strategy == NO_ADX && weightADX > 0.1) {
+        skip = true;        
     }
 
     // if (atr_strategy == USE_ATR) {
     //     totalWeight += atr_weight;
+    // } else if (atr_strategy == NO_ATR && atr_weight > 0.1) {
+    //     skip = true;
     // }
 
     if (use_threshold && totalWeight != 1.0) {
         Alert("Total weight exceeds 1.0, please adjust weights accordingly.");
-        return INIT_FAILED;
+        skip = true;
     }
 
     // Normalize weights for active indicators
@@ -389,7 +403,7 @@ int OnInit() {
     ChartIndicatorAdd(0, 1, rsi_handle);
     ChartIndicatorAdd(0, 2, macd_handle);
     ChartIndicatorAdd(0, 3, adx_handle);
-    ChartIndicatorAdd(0, 4, atr_handle); // Add ATR to chart for visualization
+    ChartIndicatorAdd(0, 4, atr_handle);
 
     SetIndexBuffer(0, first_ema_buffer, INDICATOR_DATA);
     SetIndexBuffer(1, second_ema_buffer, INDICATOR_DATA);
@@ -479,6 +493,12 @@ void OnTick() {
     // }
 
     // skip to end if weight > 1
+
+    // if backetesting, skip if skip is true
+    if (MQLInfoInteger(MQL_TESTER) && skip) {
+        Print("Skipping tick due to initialization errors.");
+        return;
+    }
 
     reasoning = ""; // Reset reasoning at the start of each tick
     buy_confidence = 0.0;
