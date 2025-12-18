@@ -188,7 +188,7 @@ double atr_buffer[];     // Buffer ATR
 
 ulong magic_number = 50357114; // Magic number (changed to ulong to avoid overflow)
 double contract_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_CONTRACT_SIZE);
-int decimal = (int)(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));              // Decimal
+int decimal = (int)(SymbolInfoInteger(_Symbol, SYMBOL_DIGITS));       // Decimal
 double tick_size = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE); // Tick size
 
 bool was_market_open = false;   // Variable to track market open state
@@ -320,7 +320,7 @@ int OnInit() {
     atr_handle = iATR(_Symbol, _Period, atr_period); // Initialize ATR handle
 
     // Check if the indicators were created successfully
-    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE || 
+    if (first_ema_handle == INVALID_HANDLE || second_ema_handle == INVALID_HANDLE || third_ema_handle == INVALID_HANDLE ||
         bb_handle == INVALID_HANDLE || rsi_handle == INVALID_HANDLE || macd_handle == INVALID_HANDLE || adx_handle == INVALID_HANDLE ||
         (atr_strategy == USE_ATR && atr_handle == INVALID_HANDLE)) {
         Alert("Error trying to create Handles for indicator - error: ", GetLastError(), "!");
@@ -331,31 +331,31 @@ int OnInit() {
     if (ma_strategy != NO_MA) {
         totalWeight += weightMA;
     } else if (ma_strategy == NO_MA && weightMA > 0.1) {
-        skip = true;        
+        skip = true;
     }
 
     if (bb_strategy != NO_BB) {
         totalWeight += weightBB;
     } else if (bb_strategy == NO_BB && weightBB > 0.1) {
-        skip = true;        
+        skip = true;
     }
 
     if (rsi_strategy != NO_RSI) {
         totalWeight += weightRSI;
     } else if (rsi_strategy == NO_RSI && weightRSI > 0.1) {
-        skip = true;        
+        skip = true;
     }
 
     if (macd_strategy != NO_MACD) {
         totalWeight += weightMACD;
     } else if (macd_strategy == NO_MACD && weightMACD > 0.1) {
-        skip = true;        
+        skip = true;
     }
 
     if (adx_strategy != NO_ADX) {
         totalWeight += weightADX;
     } else if (adx_strategy == NO_ADX && weightADX > 0.1) {
-        skip = true;        
+        skip = true;
     }
 
     // if (atr_strategy == USE_ATR) {
@@ -509,7 +509,6 @@ void OnTick() {
         const string message = "Market is open.";
         SendNotification(message);
         was_market_open = true;
-
     } else if (!marketOpen() && was_market_open) {
         const string message = "Market is closed.";
         SendNotification(message);
@@ -717,7 +716,6 @@ void OnTick() {
         } else if (sell_rsi) {
             reasoning += StringFormat("RSI: RSI decreasing (%.2f < %.2f, Confidence: %.2f)\n", rsi_buffer[0], rsi_buffer[1], -confidenceRSI);
         }
-
     } else if (rsi_strategy == LIMIT) {
         double currentRSI = rsi_buffer[0];
 
@@ -730,7 +728,6 @@ void OnTick() {
             sell_rsi = false;
 
             reasoning += StringFormat("RSI: Extremely oversold (%.2f <= %.2f, Confidence: %.2f)\n", currentRSI, rsi_oversold, confidenceRSI);
-
         } else if (currentRSI >= rsi_overbought) { // Extreme overbought condition
             double range = 100.0 - rsi_overbought; // Range from overbought level to 100
 
@@ -786,7 +783,6 @@ void OnTick() {
         } else if (sell_macd) {
             reasoning += StringFormat("MACD: MACD crossed below signal (Confidence: %.2f)\n", -confidenceMACD);
         }
-
     } else if (macd_strategy == HIST) {
         double hist = macd_main_buffer[0] - macd_signal_buffer[0];
 
@@ -928,7 +924,6 @@ void OnTick() {
             } else if (Sell && sell_confidence >= buy_confidence) {
                 shouldSell = true;
             }
-
         } else if (trade_criteria == CONFIDENCE) {
             // Use confidence thresholds to determine trade direction
             if (buy_confidence >= buy_threshold && buy_confidence > sell_confidence) {
@@ -936,7 +931,6 @@ void OnTick() {
             } else if (sell_confidence >= sell_threshold && sell_confidence > buy_confidence) {
                 shouldSell = true;
             }
-
         } else if (trade_criteria == BOTH) {
             // Use both confidence and thresholds
             if (Buy && buy_confidence >= buy_threshold && buy_confidence > sell_confidence) {
@@ -980,7 +974,6 @@ void OnTick() {
 
             openTrade = true;
             reasoning = ""; // Reset reasoning after trade
-
         } else if (shouldSell && !hasSell) {
             const string message = StringFormat("Sell Signal for %s\nSell Confidence: %.2f\nReasoning:\n%s", _symbol, sell_confidence, reasoning);
 
@@ -1104,7 +1097,6 @@ void BuyAtMarket(string comments = "") {
             tp = NormalizeDouble(RoundToTick(tick.ask + (current_atr * atr_tp_multiplier)), decimal); // Adjust for bid at exit
         else
             tp = NormalizeDouble(RoundToTick(tick.ask + TP), decimal); // Adjust for bid at exit
-
     } else {
         if (SL > 0)
             sl = NormalizeDouble(RoundToTick(tick.bid - SL), decimal); // Adjust for bid at exit
@@ -1128,7 +1120,6 @@ void BuyAtMarket(string comments = "") {
             Print("Buy Order failed. Return code=", ExtTrade.ResultRetcode(), ". Code description: ", ExtTrade.ResultRetcodeDescription());
             Print("Ask: ", tick.ask, " SL: ", sl, " TP: ", tp);
         }
-
     } else {
         string message = "Buy " + _symbol + " \nPrice: " + DoubleToString(tick.ask, decimal) +
                          "\nSL: " + DoubleToString(sl, decimal) + "\nTP: " + DoubleToString(tp, decimal);
@@ -1153,7 +1144,6 @@ void SellAtMarket(string comments = "") {
             tp = NormalizeDouble(RoundToTick(tick.bid - (current_atr * atr_tp_multiplier)), decimal); // Adjust for ask at exit
         else
             tp = NormalizeDouble(RoundToTick(tick.bid - TP), decimal); // Adjust for ask at exit
-
     } else {
         if (SL > 0)
             sl = NormalizeDouble(RoundToTick(tick.ask + SL), decimal); // Adjust for ask at exit
@@ -1173,13 +1163,11 @@ void SellAtMarket(string comments = "") {
             //           ". Code description: ", ExtTrade.ResultRetcodeDescription());
             //     Print("Bid: ", tick.bid);
             // }
-
         } else {
             Print("Sell Order failed. Return code=", ExtTrade.ResultRetcode(),
                   ". Code description: ", ExtTrade.ResultRetcodeDescription());
             Print("Bid: ", tick.bid, " SL: ", sl, " TP: ", tp);
         }
-
     } else {
         string message = "Sell " + _symbol + "\nPrice: " + DoubleToString(tick.bid, decimal) +
                          "\nSL: " + DoubleToString(sl, decimal) + "\nTP: " + DoubleToString(tp, decimal);
@@ -1666,7 +1654,8 @@ double highGrowthLowDrawdown() {
 
     // Avoid division by zero
     if (trades < 1)
-        return -1.0;
+        // return DBL_MIN;
+        return -100.0;
 
     double avgProfitPerTrade = (grossProfit + grossLoss) / trades;
 
