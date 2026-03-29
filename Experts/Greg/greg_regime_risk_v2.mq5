@@ -1,6 +1,12 @@
+//+------------------------------------------------------------------+
+//|                                          greg_regime_risk_v2.mq5 |
+//|                                                          Greg EA |
+//|                           Volatility-Regime Adaptive Risk v2     |
+//+------------------------------------------------------------------+
+#property copyright "Greg EA"
+#property version   "2.00"
+#property description "Greg EA v2 - Trend + Pullback + ATR Risk + Volatility-Regime Adaptive SL/TP"
 #property strict
-#property version   "1.20"
-#property description "Greg EA v1.2 - Trend + Pullback + ATR Risk + Live Dashboard + Vol Regime + BE"
 
 #include <Trade/Trade.mqh>
 
@@ -20,13 +26,23 @@ input double RSI_Sell_Max = 50.0;
 
 input group "=== Risk / Trade Management ===";
 input double RiskPercent = 0.5;          // % of equity per trade
-input double ATR_SL_Mult = 2.0;
-input double ATR_TP_Mult = 3.0;
 input int ATRPeriod = 14;
 input bool UseTrailingStop = true;
 input double ATR_Trail_Mult = 1.2;
 input double MaxLotsCap = 1.0;           // hard cap safety
 input bool OnePositionPerSymbol = true;
+
+input group "=== ATR-based Volatility Regime ===";
+input bool UseVolatilityRegime = true;  // Enable regime-adaptive SL/TP multipliers
+input int VolRegimeLookback = 100;       // Bars for ATR percentile lookback
+input double VolLowThreshold = 0.33;    // Percentile below = LOW vol regime
+input double VolHighThreshold = 0.66;   // Percentile above = HIGH vol regime
+input double ATR_SL_Mult_LOW = 1.5;     // SL multiplier when vol is LOW
+input double ATR_TP_Mult_LOW = 2.5;     // TP multiplier when vol is LOW
+input double ATR_SL_Mult_MID = 2.0;     // SL multiplier when vol is MID (default)
+input double ATR_TP_Mult_MID = 3.0;     // TP multiplier when vol is MID (default)
+input double ATR_SL_Mult_HIGH = 2.5;    // SL multiplier when vol is HIGH
+input double ATR_TP_Mult_HIGH = 4.0;    // TP multiplier when vol is HIGH
 
 input group "=== Guardrails ===";
 input double MaxDailyLossPercent = 2.0;  // stop opening new trades after this
@@ -54,6 +70,10 @@ int hATR = INVALID_HANDLE;
 // ========================= State =========================
 datetime g_lastBarTime = 0;
 int g_consecutiveLosses = 0;
+
+// Current volatility regime state (0=LOW, 1=MID, 2=HIGH)
+int g_currentRegime = 1;
+double g_currentAtrPct = 0.5;
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -190,6 +210,111 @@ double LotsByRisk(double entryPrice, double slPrice) {
    return ClampVolume(rawLots);
 }
 
+// ========================= Volatility Regime Detection =========================
+// Classifies the current bar as LOW(0), MID(1), or HIGH(2) volatility based on
+// ATR percentile over VolRegimeLookback bars.
+// LOW  = ATR percentile < VolLowThreshold  (below 33rd percentile by default)
+// HIGH = ATR percentile > VolHighThreshold  (above 66th percentile by default)
+// MID  = everything in between
+
+void UpdateVolatilityRegime(double currentAtr) {
+   if(!UseVolatilityRegime) {
+      g_currentRegime = 1;  // default to MID when disabled
+      g_currentAtrPct = 0.5;
+      return;
+   }
+
+   // Copy ATR history for percentile ranking
+   double atrArr[];
+   ArrayResize(atrArr, VolRegimeLookback);
+   ArraySetAsSeries(atrArr, true);
+   int copied = CopyBuffer(hATR, 0, 0, VolRegimeLookback, atrArr);
+   if(copied < VolRegimeLookback) {
+      if(DebugLogs) Print("UpdateVolatilityRegime: only copied ", copied, " bars");
+      g_currentRegime = 1;
+      g_currentAtrPct = 0.5;
+      return;
+   }
+
+   // Use the previous closed bar's ATR as the "current" for regime classification
+   double atrNow = atrArr[1];  // most recent completed bar
+
+   // Build a sorted copy for percentile ranking
+   double sorted[];
+   ArrayResize(sorted, VolRegimeLookback);
+   for(int i=0;i<VolRegimeLookback;i++) sorted[i] = atrArr[i];
+
+   // Bubble sort (same approach as Phase1, reliable for this size)
+   for(int i=0;i<VolRegimeLookback-1;i++) {
+      for(int j=i+1;j<VolRegimeLookback;j++) {
+         if(sorted[j] < sorted[i]) {
+            double tmp = sorted[i];
+            sorted[i] = sorted[j];
+            sorted[j] = tmp;
+         }
+      }
+   }
+
+   // Compute percentile rank of atrNow within the sorted window
+   double atrPct = 0.5;
+   if(atrNow <= sorted[0]) {
+      atrPct = 0.0;
+   } else if(atrNow >= sorted[VolRegimeLookback-1]) {
+      atrPct = 1.0;
+   } else {
+      // Linear interpolation between sorted elements
+      int idx = 0;
+      for(int i=0;i<VolRegimeLookback;i++) {
+         if(sorted[i] > atrNow) { idx = i; break; }
+      }
+      double lower = sorted[idx-1];
+      double upper = sorted[idx];
+      if(upper != lower) {
+         double t = (atrNow - lower) / (upper - lower);
+         atrPct = ((double)(idx-1) + t) / (double)(VolRegimeLookback-1);
+      }
+   }
+
+   // Determine regime
+   int newRegime = 1;
+   if(atrPct < VolLowThreshold) newRegime = 0;       // LOW
+   else if(atrPct > VolHighThreshold) newRegime = 2; // HIGH
+   else newRegime = 1;                                // MID
+
+   // Log regime changes
+   if(newRegime != g_currentRegime) {
+      string regimeNames[3] = {"LOW", "MID", "HIGH"};
+      if(DebugLogs) PrintFormat("VolRegime change: %s -> %s (ATR_pct=%.3f, ATR=%.5f)",
+         regimeNames[g_currentRegime], regimeNames[newRegime], atrPct, atrNow);
+      g_currentRegime = newRegime;
+   }
+
+   g_currentAtrPct = atrPct;
+}
+
+// Returns the regime as a readable string
+string VolRegimeToString() {
+   string names[3] = {"LOW ", "MID ", "HIGH"};
+   return names[g_currentRegime];
+}
+
+// Returns the effective SL multiplier for the current regime
+double GetRegimeSLMult() {
+   if(!UseVolatilityRegime) return ATR_SL_Mult_MID;
+   if(g_currentRegime == 0) return ATR_SL_Mult_LOW;
+   if(g_currentRegime == 2) return ATR_SL_Mult_HIGH;
+   return ATR_SL_Mult_MID;
+}
+
+// Returns the effective TP multiplier for the current regime
+double GetRegimeTPMult() {
+   if(!UseVolatilityRegime) return ATR_TP_Mult_MID;
+   if(g_currentRegime == 0) return ATR_TP_Mult_LOW;
+   if(g_currentRegime == 2) return ATR_TP_Mult_HIGH;
+   return ATR_TP_Mult_MID;
+}
+
+// ========================= Signal & ATR =========================
 int SignalDirection(double &atrOut) {
    // Read closed bars only: [1] current closed, [2] previous closed
    double fast[3], slow[3], rsi[3], adx[3], atr[3];
@@ -226,32 +351,6 @@ int SignalDirection(double &atrOut) {
    return 0;
 }
 
-string GetVolatilityRegime(double currentATR) {
-   // Compute ATR percentile vs 100-bar lookback: LOW < 33rd, HIGH > 66th, else MID
-   double atrArr[];
-   ArrayResize(atrArr, 100);
-   ArraySetAsSeries(atrArr, true);
-   if(CopyBuffer(hATR, 0, 0, 100, atrArr) < 100) return "N/A";
-
-   // Bubble sort to get percentiles (simple and reliable)
-   for(int i = 0; i < 99; i++) {
-      for(int j = i + 1; j < 100; j++) {
-         if(atrArr[j] < atrArr[i]) {
-            double tmp = atrArr[i];
-            atrArr[i] = atrArr[j];
-            atrArr[j] = tmp;
-         }
-      }
-   }
-
-   double p33 = atrArr[32];  // 33rd percentile (0-indexed)
-   double p66 = atrArr[65];  // 66th percentile
-
-   if(currentATR < p33) return "LOW ";
-   if(currentATR > p66) return "HIGH";
-   return "MID ";
-}
-
 void ManageTrailing(double atrVal) {
    if(!UseTrailingStop) return;
    if(!PositionSelect(_Symbol)) return;
@@ -282,7 +381,6 @@ void ManageTrailing(double atrVal) {
       if(riskDist > 0 && rewardDist > 0) {
          double rr = rewardDist / riskDist;
          if(rr >= BeThreshold) {
-            // Move SL to entry (+ spread buffer for sells)
             double newSL = (type == POSITION_TYPE_BUY) ? entry : entry + spread;
             newSL = NormalizeDouble(newSL, digits);
             if(newSL != sl) {
@@ -300,9 +398,6 @@ void ManageTrailing(double atrVal) {
       newSL = NormalizeDouble(newSL, digits);
       if(newSL > sl || sl == 0) trade.PositionModify(_Symbol, newSL, tp);
    } else if(type == POSITION_TYPE_SELL) {
-      // For short: SL is ABOVE entry (sl > entry). As price falls, ask drops,
-      // so newSL = ask - ATR*mult should be LOWER than current sl to tighten.
-      // Condition: newSL < sl (tightening) OR first activation (sl == 0)
       double newSL = ask - ATR_Trail_Mult * atrVal;
       newSL = NormalizeDouble(newSL, digits);
       if((newSL < sl && sl > 0) || sl == 0) trade.PositionModify(_Symbol, newSL, tp);
@@ -317,7 +412,9 @@ int OnInit() {
    hADX = iADX(_Symbol, SignalTF, ADXPeriod);
    hATR = iATR(_Symbol, SignalTF, ATRPeriod);
 
-   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE || hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE || (UseADXFilter && hADX == INVALID_HANDLE)) {
+   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE ||
+      hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE ||
+      (UseADXFilter && hADX == INVALID_HANDLE)) {
       Print("Init failed: indicator handle invalid. err=", GetLastError());
       return INIT_FAILED;
    }
@@ -325,7 +422,12 @@ int OnInit() {
    trade.SetExpertMagicNumber(Magic);
    trade.SetDeviationInPoints(20);
 
-   if(DebugLogs) Print("Greg EA v1.2 initialized.");
+   // Initialize volatility regime on startup
+   double dummyAtr = 0;
+   SignalDirection(dummyAtr);  // prime the ATR buffer
+   UpdateVolatilityRegime(dummyAtr);
+
+   if(DebugLogs) Print("Greg EA v2 initialized. VolRegime=", VolRegimeToString());
    if(ShowDashboard) PrintDashboard();
    return INIT_SUCCEEDED;
 }
@@ -342,13 +444,17 @@ void OnDeinit(const int reason) {
 void OnTick() {
    if(!IsNewBar(SignalTF)) return;
 
+   // Update volatility regime on each new bar
+   double atr = 0;
+   SignalDirection(atr);  // also populates atr
+   UpdateVolatilityRegime(atr);
+
    if(ShowDashboard) PrintDashboard();
 
    if(!SessionAllowed()) return;
    if(!SpreadPass()) return;
    if(!RiskGuardsPass()) return;
 
-   double atr = 0.0;
    int dir = SignalDirection(atr);
 
    ManageTrailing(atr);
@@ -362,14 +468,18 @@ void OnTick() {
 
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
    double entry = (dir > 0 ? ask : bid);
-   double sl = 0.0, tp = 0.0;
 
+   // Regime-adaptive SL/TP multipliers
+   double slMult = GetRegimeSLMult();
+   double tpMult = GetRegimeTPMult();
+
+   double sl = 0.0, tp = 0.0;
    if(dir > 0) {
-      sl = NormalizeDouble(entry - ATR_SL_Mult * atr, digits);
-      tp = NormalizeDouble(entry + ATR_TP_Mult * atr, digits);
+      sl = NormalizeDouble(entry - slMult * atr, digits);
+      tp = NormalizeDouble(entry + tpMult * atr, digits);
    } else {
-      sl = NormalizeDouble(entry + ATR_SL_Mult * atr, digits);
-      tp = NormalizeDouble(entry - ATR_TP_Mult * atr, digits);
+      sl = NormalizeDouble(entry + slMult * atr, digits);
+      tp = NormalizeDouble(entry - tpMult * atr, digits);
    }
 
    double lots = LotsByRisk(entry, sl);
@@ -379,11 +489,13 @@ void OnTick() {
    }
 
    bool ok = false;
-   if(dir > 0) ok = trade.Buy(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v1");
-   else ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v1");
+   if(dir > 0) ok = trade.Buy(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v2");
+   else ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v2");
 
    if(DebugLogs) {
-      PrintFormat("Order dir=%d lots=%.2f entry=%.5f sl=%.5f tp=%.5f ok=%d ret=%d", dir, lots, entry, sl, tp, (int)ok, trade.ResultRetcode());
+      PrintFormat("Order dir=%d lots=%.2f entry=%.5f sl=%.5f tp=%.5f regime=%s slMult=%.1f tpMult=%.1f ok=%d ret=%d",
+         dir, lots, entry, sl, tp, VolRegimeToString(), slMult, tpMult,
+         (int)ok, trade.ResultRetcode());
    }
 }
 
@@ -404,39 +516,59 @@ void PrintDashboard() {
       posStr = StringFormat("%s %.2f lots @ %.5f | P&L: %.2f", dir, vol, openPrice, posProfit);
    }
 
-   string regimeStr = "N/A";
+   // Prime ATR for regime update (safe to call even without a signal)
    double atrVal = 0;
-   int dir = SignalDirection(atrVal);
-   if(dir > 0) regimeStr = "BUY ";
-   else if(dir < 0) regimeStr = "SELL ";
-   else regimeStr = "NONE";
+   int dashDir = SignalDirection(atrVal);  // populate atrVal and get direction
+   UpdateVolatilityRegime(atrVal);  // recompute regime using current bar's ATR
 
-   // ATR-based volatility regime awareness (raw ATR — compare to recent range for context)
-   string volRegime = GetVolatilityRegime(atrVal);
+   string regimeStr = "N/A";
+   if(PositionSelect(_Symbol) && PositionGetInteger(POSITION_MAGIC) == Magic) {
+      long type = PositionGetInteger(POSITION_TYPE);
+      regimeStr = (type == POSITION_TYPE_BUY) ? "BUY " : "SELL ";
+   } else if(atrVal > 0) {
+      if(dashDir > 0) regimeStr = "BUY ";
+      else if(dashDir < 0) regimeStr = "SELL ";
+      else regimeStr = "NONE";
+   }
+
+   string volRegimeStr = VolRegimeToString();
+   string volRegimeNote = "";
+   if(UseVolatilityRegime) {
+      volRegimeNote = StringFormat(" (%.0f%%tile)", g_currentAtrPct * 100);
+   } else {
+      volRegimeStr = "OFF ";
+      volRegimeNote = "";
+   }
+
+   // Show effective multipliers based on current regime
+   double slMult = GetRegimeSLMult();
+   double tpMult = GetRegimeTPMult();
 
    string txt = StringFormat(
-      "Greg EA v1.2 | %s\n" +
-      "----------------------------\n" +
+      "Greg EA v2.0 | %s\n" +
+      "----------------------------------------\n" +
       "Equity:   %.2f\n" +
       "Balance:  %.2f\n" +
       "Daily P&L: %.2f (%.2f%%)\n" +
-      "----------------------------\n" +
+      "----------------------------------------\n" +
       "Signal:   %s\n" +
       "ATR(%d):  %.5f\n" +
-      "Vol:      %s\n" +
-      "Risk:     %.1f%% | SL:%.1f TP:%.1f\n" +
-      "----------------------------\n" +
+      "Vol Regime: %s%s\n" +
+      "SL Mult:  %.1f  TP Mult:  %.1f\n" +
+      "Risk:     %.1f%%\n" +
+      "----------------------------------------\n" +
       "Consecutive Losses: %d\n" +
       "Max Daily Loss: %.1f%%\n" +
       "Max Consec Loss: %d\n" +
-      "----------------------------\n" +
+      "----------------------------------------\n" +
       "Position: %s",
       _Symbol,
       eq, bal, dailyPnl, (bal > 0 ? dailyPnl/bal*100 : 0),
       regimeStr,
       ATRPeriod, atrVal,
-      volRegime,
-      RiskPercent, ATR_SL_Mult, ATR_TP_Mult,
+      volRegimeStr, volRegimeNote,
+      slMult, tpMult,
+      RiskPercent,
       g_consecutiveLosses,
       MaxDailyLossPercent,
       MaxConsecutiveLosses,
