@@ -141,6 +141,15 @@ input bool boost = false;              // Use high risk until target reached
 input double boost_target = 5000;      // Boost target
 input double price_per_contract = 0.0; // Price per contract
 
+sinput string s_guardrails;                              //-----------------Guardrails-----------------
+input double MaxDailyLossPercent = 2.0;                 // Max daily loss as % of equity (stop trading if hit)
+input int MaxConsecutiveLosses = 4;                    // Max consecutive losses before pausing
+input double MaxSpreadPoints = 50.0;                    // Max spread in points to allow trades
+input bool UseSessionFilter = true;                   // Enable session time filter
+input int SessionStartHour = 7;                        // Session start hour (broker time)
+input int SessionEndHour = 16;                         // Session end hour (broker time)
+input bool DebugRiskGuards = false;                    // Print guard trigger messages
+
 sinput string s6;                                //-----------------Test-----------------
 input TEST_CRITERION test_criterion = R_SQUARED; // Test criterion
 
@@ -217,6 +226,97 @@ struct closePosition {
     int buySell;
     double price;
 } last_close_position;
+
+int g_consecutiveLosses = 0;         // Consecutive losing trades counter
+datetime g_lastResetTime = 0;        // Last guard reset time (for daily reset)
+
+//+------------------------------------------------------------------+
+//| Guard Helper Functions                                           |
+//+------------------------------------------------------------------+
+
+datetime DayStart(datetime t) {
+   MqlDateTime dt;
+   TimeToStruct(t, dt);
+   dt.hour = 0;
+   dt.min = 0;
+   dt.sec = 0;
+   return StructToTime(dt);
+}
+
+double ClosedPnlSince(datetime fromTime) {
+   if(!HistorySelect(fromTime, TimeCurrent())) return 0.0;
+   double pnl = 0.0;
+   int total = HistoryDealsTotal();
+   for(int i = 0; i < total; i++) {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _symbol) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != magic_number) continue;
+      long entry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT) continue;
+      pnl += HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      pnl += HistoryDealGetDouble(ticket, DEAL_SWAP);
+      pnl += HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+   }
+   return pnl;
+}
+
+void RefreshConsecutiveLosses() {
+   g_consecutiveLosses = 0;
+   if(!HistorySelect(0, TimeCurrent())) return;
+   int total = HistoryDealsTotal();
+   for(int i = total - 1; i >= 0; i--) {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) break;
+      if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _symbol) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != magic_number) continue;
+      long entry = HistoryDealGetInteger(ticket, DEAL_ENTRY);
+      if(entry != DEAL_ENTRY_OUT) continue;
+      double p = HistoryDealGetDouble(ticket, DEAL_PROFIT)
+               + HistoryDealGetDouble(ticket, DEAL_SWAP)
+               + HistoryDealGetDouble(ticket, DEAL_COMMISSION);
+      if(p < 0) g_consecutiveLosses++;
+      else break;
+   }
+}
+
+bool SessionPass() {
+   if(!UseSessionFilter) return true;
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   if(dt.hour < SessionStartHour || dt.hour >= SessionEndHour) return false;
+   return true;
+}
+
+bool SpreadPass() {
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   if(ask <= 0 || bid <= 0) return false;
+   double spreadPts = (ask - bid) / _Point;
+   return spreadPts <= MaxSpreadPoints;
+}
+
+bool RiskGuardsPass() {
+   RefreshConsecutiveLosses();
+
+   // Consecutive loss guard
+   if(MaxConsecutiveLosses > 0 && g_consecutiveLosses >= MaxConsecutiveLosses) {
+      if(DebugRiskGuards) Print("Risk guard: max consecutive losses hit: ", g_consecutiveLosses);
+      return false;
+   }
+
+   // Daily loss guard
+   datetime todayStart = DayStart(TimeCurrent());
+   double pnlToday = ClosedPnlSince(todayStart);
+   double eq = AccountInfoDouble(ACCOUNT_EQUITY);
+   double lossLimit = -(eq * (MaxDailyLossPercent / 100.0));
+   if(MaxDailyLossPercent > 0 && pnlToday <= lossLimit) {
+      if(DebugRiskGuards) PrintFormat("Risk guard: daily loss hit. pnlToday=%.2f limit=%.2f", pnlToday, lossLimit);
+      return false;
+   }
+
+   return true;
+}
 
 //+------------------------------------------------------------------+
 //| Expert initialization function                                   |
@@ -962,6 +1062,27 @@ void OnTick() {
         }
 
         // Execute the trade based on the determined direction
+        // Risk guards — stop trading if daily loss or consecutive loss limit hit
+        if(!RiskGuardsPass()) {
+            if(DebugRiskGuards) Print("RiskGuardsPass failed — skipping trade");
+            shouldBuy = false;
+            shouldSell = false;
+        }
+
+        // Session guard — only trade during allowed hours
+        if(!SessionPass()) {
+            if(DebugRiskGuards) Print("SessionPass failed — outside trading hours");
+            shouldBuy = false;
+            shouldSell = false;
+        }
+
+        // Spread guard — skip if spread is too wide
+        if(!SpreadPass()) {
+            if(DebugRiskGuards) Print("SpreadPass failed — spread too wide");
+            shouldBuy = false;
+            shouldSell = false;
+        }
+
         if (shouldBuy && !hasBuy) {
             const string message = StringFormat("Buy Signal for %s\nBuy Confidence: %.2f\nReasoning:\n%s", _symbol, buy_confidence, reasoning);
 
