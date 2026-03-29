@@ -149,6 +149,7 @@ input TEST_CRITERION test_criterion = R_SQUARED; // Test criterion
 
 double totalWeight = 0.0;
 double normalizedWeightMa = 0.0;   // Normalized weight for MA
+double normalizedWeightBb = 0.0;   // Normalized weight for BB
 double normalizedWeightRsi = 0.0;  // Normalized weight for RSI
 double normalizedWeightMacd = 0.0; // Normalized weight for MACD
 double normalizedWeightAdx = 0.0;  // Normalized weight for ADX
@@ -372,6 +373,10 @@ int OnInit() {
     // Normalize weights for active indicators
     if (ma_strategy != NO_MA) {
         normalizedWeightMa = weightMA / totalWeight;
+    }
+
+    if (bb_strategy != NO_BB) {
+        normalizedWeightBb = weightBB / totalWeight;
     }
 
     if (rsi_strategy != NO_RSI) {
@@ -694,8 +699,8 @@ void OnTick() {
     }
 
     if (bb_strategy == USE_BB) {
-        buy_bb = candle[1].close < bb_lower_buffer[1] && candle[0].close > bb_lower_buffer[0];
-        sell_bb = candle[1].close > bb_upper_buffer[1] && candle[0].close < bb_upper_buffer[0];
+        buy_bb = candle[2].close < bb_lower_buffer[2] && candle[1].close > bb_lower_buffer[1];
+        sell_bb = candle[2].close > bb_upper_buffer[2] && candle[1].close < bb_upper_buffer[1];
 
         confidenceBB = buy_bb ? 1.0 : (sell_bb ? -1.0 : 0.0);
 
@@ -707,17 +712,18 @@ void OnTick() {
     }
 
     if (rsi_strategy == COMPARISON) {
-        buy_rsi = rsi_buffer[0] > rsi_buffer[1];
-        sell_rsi = rsi_buffer[0] < rsi_buffer[1];
-        confidenceRSI = (rsi_buffer[0] - rsi_buffer[1]) / rsi_buffer[1]; // Gradient confidence based on relative change
+        buy_rsi = rsi_buffer[1] > rsi_buffer[2];
+        sell_rsi = rsi_buffer[1] < rsi_buffer[2];
+        double prevRSI = MathMax(1e-6, rsi_buffer[2]);
+        confidenceRSI = (rsi_buffer[1] - rsi_buffer[2]) / prevRSI; // Gradient confidence based on closed-bar relative change
 
         if (buy_rsi) {
-            reasoning += StringFormat("RSI: RSI increasing (%.2f > %.2f, Confidence: %.2f)\n", rsi_buffer[0], rsi_buffer[1], confidenceRSI);
+            reasoning += StringFormat("RSI: RSI increasing (%.2f > %.2f, Confidence: %.2f)\n", rsi_buffer[1], rsi_buffer[2], confidenceRSI);
         } else if (sell_rsi) {
-            reasoning += StringFormat("RSI: RSI decreasing (%.2f < %.2f, Confidence: %.2f)\n", rsi_buffer[0], rsi_buffer[1], -confidenceRSI);
+            reasoning += StringFormat("RSI: RSI decreasing (%.2f < %.2f, Confidence: %.2f)\n", rsi_buffer[1], rsi_buffer[2], -confidenceRSI);
         }
     } else if (rsi_strategy == LIMIT) {
-        double currentRSI = rsi_buffer[0];
+        double currentRSI = rsi_buffer[1];
 
         // Extreme oversold condition
         if (currentRSI < rsi_oversold) {
@@ -774,8 +780,8 @@ void OnTick() {
     }
 
     if (macd_strategy == SIGNAL) {
-        buy_macd = macd_main_buffer[0] > macd_signal_buffer[0] && macd_main_buffer[2] < macd_signal_buffer[2];
-        sell_macd = macd_main_buffer[0] < macd_signal_buffer[0] && macd_main_buffer[2] > macd_signal_buffer[2];
+        buy_macd = macd_main_buffer[1] > macd_signal_buffer[1] && macd_main_buffer[2] <= macd_signal_buffer[2];
+        sell_macd = macd_main_buffer[1] < macd_signal_buffer[1] && macd_main_buffer[2] >= macd_signal_buffer[2];
         confidenceMACD = buy_macd ? 1.0 : (sell_macd ? -1.0 : 0.0);
 
         if (buy_macd) {
@@ -784,7 +790,7 @@ void OnTick() {
             reasoning += StringFormat("MACD: MACD crossed below signal (Confidence: %.2f)\n", -confidenceMACD);
         }
     } else if (macd_strategy == HIST) {
-        double hist = macd_main_buffer[0] - macd_signal_buffer[0];
+        double hist = macd_main_buffer[1] - macd_signal_buffer[1];
 
         buy_macd = hist > 0;
         sell_macd = hist < 0;
@@ -858,6 +864,11 @@ void OnTick() {
     if (ma_strategy != NO_MA) {
         buy_confidence += confidenceMA * normalizedWeightMa;
         sell_confidence += -confidenceMA * normalizedWeightMa;
+    }
+
+    if (bb_strategy != NO_BB) {
+        buy_confidence += confidenceBB * normalizedWeightBb;
+        sell_confidence += -confidenceBB * normalizedWeightBb;
     }
 
     if (rsi_strategy != NO_RSI) {
@@ -1264,16 +1275,20 @@ void closeAllTrade() {
             continue;
         }
 
+        double posProfit = PositionGetDouble(POSITION_PROFIT);
+        int posType = (int)PositionGetInteger(POSITION_TYPE);
+        double posPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
+
         if (!ExtTrade.PositionClose(ticket)) {
             Print("Close trade failed. Return code=", ExtTrade.ResultRetcode(),
                   ". Code description: ", ExtTrade.ResultRetcodeDescription());
         } else {
-            if (PositionGetDouble(POSITION_PROFIT) > 0) {
-                last_close_position.buySell = (int)PositionGetInteger(POSITION_TYPE);
-                last_close_position.price = PositionGetDouble(POSITION_PRICE_CURRENT);
+            if (posProfit > 0) {
+                last_close_position.buySell = posType;
+                last_close_position.price = posPrice;
             }
 
-            string message = _symbol + " Closed\nPrice: " + DoubleToString(PositionGetDouble(POSITION_PRICE_CURRENT), decimal) + "\nProfit: " + DoubleToString(PositionGetDouble(POSITION_PROFIT), decimal);
+            string message = _symbol + " Closed\nPrice: " + DoubleToString(posPrice, decimal) + "\nProfit: " + DoubleToString(posProfit, decimal);
             SendNotification(message);
             // Print("Close position successfully!");
         }
@@ -1408,9 +1423,13 @@ void updateSLTP(double current_atr) {
 double getVolume() {
     double volume = 0.0;
 
-    if (risk_management == FIXED_VOLUME && fixed_volume > 0) {
-        printf("Using fixed volume: %d", fixed_volume);
-        volume = fixed_volume;
+    if (risk_management == FIXED_VOLUME) {
+        if (fixed_volume > 0) {
+            volume = MathMax(minVol, MathMin(maxVol, fixed_volume));
+            return volume;
+        }
+        Print("FIXED_VOLUME selected but fixed_volume <= 0. Falling back to min volume.");
+        return minVol;
     }
 
     if (boost == true && boost_target > 0) {
@@ -1424,41 +1443,81 @@ double getVolume() {
     } else if (risk_management == FIXED_PERCENTAGE) {
         return fixedPercentageVol();
     } else {
-        return 1;
+        return minVol;
     }
 }
 
-double fixedPercentageVol() {
-    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double riskPct = max_risk; // Use the configured max risk percentage
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-    double riskMargin = freeMargin * (max_risk / 100.0);
-    double marginPerLot = SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL);
-    double rawLots = riskMargin / marginPerLot;
+
+
+double computeRiskBasedLots(double riskPct) {
+    const double SAFETY_MAX_LOTS = 1.0; // safety cap for index/CFD sizing
+
+    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+    if (equity <= 0 || riskPct <= 0)
+        return minVol;
+
+    // Estimate stop distance in price units
+    double slDistance = 0.0;
+
+    if (atr_strategy == USE_ATR && atr_sl_multiplier > 0 && ArraySize(atr_buffer) > 1 && atr_buffer[1] > 0) {
+        slDistance = atr_buffer[1] * atr_sl_multiplier;
+    } else if (SL > 0) {
+        slDistance = SL * _Point;
+    }
+
+    if (slDistance <= 0) {
+        Print("computeRiskBasedLots(): invalid SL distance, fallback to minVol");
+        return minVol;
+    }
+
+    double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+
+    if (tickValue <= 0 || tickSize <= 0) {
+        Print("computeRiskBasedLots(): invalid tick value/size, fallback to minVol");
+        return minVol;
+    }
+
+    double riskMoney = equity * (riskPct / 100.0);
+    double moneyPerLotAtSL = (slDistance / tickSize) * tickValue;
+
+    if (moneyPerLotAtSL <= 0) {
+        Print("computeRiskBasedLots(): invalid moneyPerLotAtSL, fallback to minVol");
+        return minVol;
+    }
+
+    double rawLots = riskMoney / moneyPerLotAtSL;
 
     if (trade_criteria != CONDITION) {
-        if (shouldBuy) {
-            rawLots *= buy_confidence;
-        } else if (shouldSell) {
-            rawLots *= sell_confidence;
-        }
+        if (shouldBuy)
+            rawLots *= MathMax(0.0, MathMin(1.0, buy_confidence));
+        else if (shouldSell)
+            rawLots *= MathMax(0.0, MathMin(1.0, sell_confidence));
     }
+
+    if (stepVol <= 0)
+        stepVol = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
 
     double flooredLots = stepVol * MathFloor(rawLots / stepVol);
     double clamped = MathMax(minVol, MathMin(maxVol, flooredLots));
+    clamped = MathMin(clamped, SAFETY_MAX_LOTS);
 
     int precision = 0;
-
     if (stepVol < 1.0)
         precision = (int)MathRound(-MathLog10(stepVol));
 
     double finalLots = NormalizeDouble(clamped, precision);
 
     PrintFormat(
-        "fixedPrecentage Bal=%.2f FreeM=%.2f Risk%%=%.2f%% RiskM=%.2f M/Lot=%.2f Raw=%.4f Final=%.2f (step=%.4f)",
-        balance, freeMargin, riskPct, riskMargin, marginPerLot, rawLots, finalLots, stepVol);
+        "RiskLots Eq=%.2f Risk%%=%.2f SLDist=%.5f TickVal=%.5f TickSize=%.5f Raw=%.4f Final=%.2f",
+        equity, riskPct, slDistance, tickValue, tickSize, rawLots, finalLots);
 
-    return (finalLots);
+    return finalLots;
+}
+
+double fixedPercentageVol() {
+    double riskPct = MathMax(0.1, MathMin(5.0, (double)max_risk));
+    return computeRiskBasedLots(riskPct);
 }
 
 //+------------------------------------------------------------------+
@@ -1470,116 +1529,46 @@ double fixedPercentageVol() {
 //+------------------------------------------------------------------+
 
 double optimizedVol() {
-    // 1) Fetch current price and free margin
+    double riskPct = MathMax(0.1, MathMin(5.0, (double)max_risk));
 
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
-
-    if (price <= 0 || freeMargin <= 0) {
-        Print("optimizedVol(): invalid price or free margin");
-
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-    }
-
-    // 2) Compute margin required to open 1.0 lot
-    double marginPerLot = 0.0;
-
-    if (!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, price, marginPerLot) || marginPerLot <= 0.0) {
-        Print("optimizedVol(): OrderCalcMargin failed, code=", GetLastError());
-
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-    }
-
-    // 3) Determine how much margin we're willing to risk
-    double riskMargin = freeMargin * (max_risk / 100.0);
-
-    // 4) Raw lot calculation
-    double rawLots = riskMargin / marginPerLot;
-
-    // 5) Apply consecutive‑loss penalty if configured
+    // Apply mild consecutive-loss penalty by reducing effective risk pct
     if (decrease_factor > 0) {
         HistorySelect(0, TimeCurrent());
-
         int totalDeals = HistoryDealsTotal();
         int losses = 0;
 
         for (int i = totalDeals - 1; i >= 0; --i) {
             ulong ticket = HistoryDealGetTicket(i);
-
             if (ticket == 0)
                 break;
-
             if (HistoryDealGetString(ticket, DEAL_SYMBOL) != _symbol)
                 continue;
 
             double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-
             if (profit > 0.0)
                 break;
-
             if (profit < 0.0)
                 losses++;
         }
 
-        if (losses > 1)
-            rawLots -= rawLots * losses / decrease_factor;
+        if (losses > 1) {
+            double penalty = MathMin(0.8, (double)losses / MathMax(1.0, decrease_factor));
+            riskPct *= (1.0 - penalty);
+        }
     }
 
-    // 7) Floor to nearest step and clamp
-    double flooredLots = stepVol * MathFloor(rawLots / stepVol);
-    double clippedLots = MathMax(minVol, MathMin(maxVol, flooredLots));
-
-    // 8) Determine decimal precision from stepVol (e.g. 0.01 → 2 decimals)
-    int precision = 0;
-
-    if (stepVol < 1.0)
-        precision = (int)MathRound(-MathLog10(stepVol));
-
-    // 9) Normalize final lot size
-    double finalLots = NormalizeDouble(clippedLots, precision);
-
-    // 10) Debug print
-    PrintFormat(
-        "optimizedVol → Price=%.5f  FreeM=%.2f  Risk%%=%d  Margin/Lot=%.2f  "
-        "RawLots=%.4f  FinalLots=%.2f  Step=%.4f",
-        price, freeMargin, max_risk, marginPerLot, rawLots, finalLots, stepVol);
-
-    return (finalLots);
+    return computeRiskBasedLots(riskPct);
 }
 
 double boostVol() {
-    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
     double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-    double freeMargin = AccountInfoDouble(ACCOUNT_MARGIN_FREE);
+    if (balance <= 0)
+        return minVol;
 
-    int minRisk = 50;                                       // Minimum risk percentage (1%)
-    double rawRiskPct = (boost_target / balance) * minRisk; // = sqrt((bt/b)^2)*minRisk
-    double riskPct = MathMin(rawRiskPct, 100.0);            // cap at 100%
-    double riskMargin = freeMargin * (riskPct / 100.0);
-    double marginPerLot = SymbolInfoDouble(_Symbol, SYMBOL_MARGIN_INITIAL);
-
-    if (!OrderCalcMargin(ORDER_TYPE_BUY, _Symbol, 1.0, price, marginPerLot) || marginPerLot <= 0.0) {
-        Print("boostVol(): failed to calculate margin per lot, code=", GetLastError());
-        Print("Margin per lot: ", marginPerLot, " for price: ", price);
-        return (SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MIN));
-    }
-
-    double rawLots = riskMargin / marginPerLot;
-    double flooredLots = stepVol * MathFloor(rawLots / stepVol);
-    double clamped = MathMax(minVol, MathMin(maxVol, flooredLots));
-
-    int precision = 0;
-
-    if (stepVol < 1.0)
-        precision = (int)MathRound(-MathLog10(stepVol));
-
-    double finalLots = NormalizeDouble(clamped, precision);
-
-    PrintFormat(
-        "boostVol → Bal=%.2f FreeM=%.2f Risk%%=%.2f%% RiskM=%.2f M/Lot=%.2f Raw=%.4f Final=%.2f (step=%.4f)",
-        balance, freeMargin, riskPct, riskMargin, marginPerLot, rawLots, finalLots, stepVol);
-
-    return (finalLots);
+    // Keep boost aggressive but bounded
+    double rawRiskPct = (boost_target / balance) * 50.0;
+    double riskPct = MathMax(0.5, MathMin(5.0, rawRiskPct));
+    return computeRiskBasedLots(riskPct);
 }
 
 double OnTester() {
