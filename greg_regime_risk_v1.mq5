@@ -40,6 +40,8 @@ input double BBStdDev = 2.0;             // Bollinger std dev
 input double ZScoreThreshold = 1.5;      // Min |z| for stretch
 input int MidRegimeADXMax = 25;          // Max ADX for MR in MID regime
 input bool UseMREntryFilter = true;      // Master toggle
+input int ATRLookback = 100;            // Lookback bars for ATR percentile regime
+input double RegimeHysteresis = 0.05;    // ATR must exceed threshold by this much to switch
 
 input group "=== Guardrails ===";
 input double MaxDailyLossPercent = 2.0;  // stop opening new trades after this
@@ -260,15 +262,16 @@ int SignalDirection(double &atrOut) {
 }
 
 string GetVolatilityRegime(double currentATR) {
-   // Compute ATR percentile vs 100-bar lookback: LOW < 33rd, HIGH > 66th, else MID
+   // Compute ATR percentile vs ATRLookback bars: LOW < 33rd, HIGH > 66th, else MID
+   // Hysteresis: must exceed threshold by RegimeHysteresis * p33/p66 to switch
    double atrArr[];
-   ArrayResize(atrArr, 100);
+   ArrayResize(atrArr, ATRLookback);
    ArraySetAsSeries(atrArr, true);
-   if(CopyBuffer(hATR, 0, 0, 100, atrArr) < 100) return "N/A";
+   if(CopyBuffer(hATR, 0, 0, ATRLookback, atrArr) < ATRLookback) return "N/A";
 
    // Bubble sort to get percentiles (simple and reliable)
-   for(int i = 0; i < 99; i++) {
-      for(int j = i + 1; j < 100; j++) {
+   for(int i = 0; i < ATRLookback - 1; i++) {
+      for(int j = i + 1; j < ATRLookback; j++) {
          if(atrArr[j] < atrArr[i]) {
             double tmp = atrArr[i];
             atrArr[i] = atrArr[j];
@@ -277,11 +280,14 @@ string GetVolatilityRegime(double currentATR) {
       }
    }
 
-   double p33 = atrArr[32];  // 33rd percentile (0-indexed)
-   double p66 = atrArr[65];  // 66th percentile
+   int p33Idx = MathMax(0, MathMin(ATRLookback - 1, (int)MathRound(0.33 * ATRLookback) - 1));
+   int p66Idx = MathMax(0, MathMin(ATRLookback - 1, (int)MathRound(0.66 * ATRLookback) - 1));
+   double p33 = atrArr[p33Idx];
+   double p66 = atrArr[p66Idx];
 
-   if(currentATR < p33) return "LOW ";
-   if(currentATR > p66) return "HIGH";
+   // Apply hysteresis to avoid oscillation at boundaries
+   if(currentATR < p33 - RegimeHysteresis * p33) return "LOW ";
+   if(currentATR > p66 + RegimeHysteresis * p66) return "HIGH";
    return "MID ";
 }
 
@@ -491,8 +497,8 @@ void ManageTrailing(double atrVal) {
       if(riskDist > 0 && rewardDist > 0) {
          double rr = rewardDist / riskDist;
          if(rr >= BeThreshold) {
-            // Move SL to entry (+ spread buffer for sells)
-            double newSL = (type == POSITION_TYPE_BUY) ? entry : entry + spread;
+            // Move SL to entry (- spread buffer for sells to lock profit at/below entry)
+            double newSL = (type == POSITION_TYPE_BUY) ? entry : entry - spread;
             newSL = NormalizeDouble(newSL, digits);
             if(newSL != sl) {
                if(DebugLogs) PrintFormat("BE triggered: rr=%.2f, moving SL from %.5f to %.5f", rr, sl, newSL);
@@ -589,7 +595,7 @@ void OnTick() {
          if(CopyBuffer(hADX, 0, 0, 2, adxMid) < 2) return;
          if(adxMid[1] >= MidRegimeADXMax) {
             if(DebugLogs) PrintFormat("MR filter: MID regime ADX too high (%.2f >= %d)", adxMid[1], MidRegimeADXMax);
-            return;
+            dir = 0;  // block entry only, do not skip trailing
          }
       }
 
@@ -670,7 +676,7 @@ void PrintDashboard() {
       double curPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double vol = PositionGetDouble(POSITION_VOLUME);
       long type = PositionGetInteger(POSITION_TYPE);
-      posProfit = PositionGetDouble(PROFIT);
+      posProfit = PositionGetDouble(POSITION_PROFIT);
       string dir = type == POSITION_TYPE_BUY ? "Long" : "Short";
       posStr = StringFormat("%s %.2f lots @ %.5f | P&L: %.2f", dir, vol, openPrice, posProfit);
    }
