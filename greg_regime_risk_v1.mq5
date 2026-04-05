@@ -199,16 +199,24 @@ double ClampVolume(double lots) {
    double maxV = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX);
    double step = SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_STEP);
    if(step <= 0) step = 0.01;
-   lots = MathMax(minV, MathMin(maxV, lots));
-   lots = MathMin(lots, MaxLotsCap);
+
+   // Respect both broker limits and local hard cap.
+   double cap = MathMin(maxV, MaxLotsCap);
+   if(cap < minV) cap = minV;
+
+   lots = MathMax(minV, MathMin(cap, lots));
+
+   // Snap down to step, then re-check minimum to avoid rounding below broker min.
    lots = step * MathFloor(lots / step);
+   if(lots < minV) lots = step * MathCeil(minV / step);
+   lots = MathMin(cap, lots);
 
    int prec = 2;
    if(step < 1.0) prec = (int)MathRound(-MathLog10(step));
    return NormalizeDouble(lots, prec);
 }
 
-double LotsByRisk(double entryPrice, double slPrice, double riskPercentToUse) {
+double LotsByRisk(int dir, double entryPrice, double slPrice, double riskPercentToUse) {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney = eq * (riskPercentToUse / 100.0);
    if(riskMoney <= 0.0) return 0.0;
@@ -221,11 +229,21 @@ double LotsByRisk(double entryPrice, double slPrice, double riskPercentToUse) {
    double minStopDist = stopsLevelPts * _Point;
    if(minStopDist > 0.0 && dist < minStopDist) dist = minStopDist;
 
-   // Robust risk-per-lot in account currency via OrderCalcProfit (avoids tick-value edge cases).
-   ENUM_ORDER_TYPE calcType = (slPrice < entryPrice ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
-   double slCalc = (calcType == ORDER_TYPE_BUY) ? (entryPrice - dist) : (entryPrice + dist);
+   // Robust risk-per-lot in account currency via OrderCalcProfit (handles cross-currency symbols).
+   ENUM_ORDER_TYPE calcType = (dir > 0 ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
+   if(dir == 0) return 0.0;
+
+   int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+   double openCalc = NormalizeDouble(entryPrice, digits);
+   double slCalc = (calcType == ORDER_TYPE_BUY)
+      ? NormalizeDouble(openCalc - dist, digits)
+      : NormalizeDouble(openCalc + dist, digits);
+
    double oneLotLoss = 0.0;
-   if(!OrderCalcProfit(calcType, _Symbol, 1.0, entryPrice, slCalc, oneLotLoss)) return 0.0;
+   if(!OrderCalcProfit(calcType, _Symbol, 1.0, openCalc, slCalc, oneLotLoss)) {
+      if(DebugLogs) PrintFormat("LotsByRisk: OrderCalcProfit failed err=%d", GetLastError());
+      return 0.0;
+   }
 
    double moneyPerLotAtSL = MathAbs(oneLotLoss);
    if(moneyPerLotAtSL <= 0.0) return 0.0;
@@ -764,7 +782,7 @@ void OnTick() {
    double effRisk = EffectiveRiskPercent(atr);
    g_lastEffectiveRiskPercent = effRisk;
 
-   double lots = LotsByRisk(entry, sl, effRisk);
+   double lots = LotsByRisk(dir, entry, sl, effRisk);
    if(lots <= 0) {
       if(DebugLogs) Print("Skip: computed lots <= 0");
       return;
