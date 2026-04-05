@@ -15,6 +15,8 @@ input int RSIPeriod = 14;
 input int ADXPeriod = 14;
 input bool UseADXFilter = true;
 input double ADXMin = 18.0;
+input int SupertrendPeriod = 10;
+input double SupertrendMult = 3.0;
 input double RSI_Buy_Min = 50.0;
 input double RSI_Sell_Max = 50.0;
 
@@ -64,6 +66,7 @@ int hATR = INVALID_HANDLE;
 int hEMA50 = INVALID_HANDLE;
 int hStdDev = INVALID_HANDLE;
 int hBands = INVALID_HANDLE;
+int hSupertrend = INVALID_HANDLE;
 
 // ========================= State =========================
 datetime g_lastBarTime = 0;
@@ -302,6 +305,21 @@ bool ZScoreStretch(int dir) {
    return false;
 }
 
+int SupertrendDirection() {
+   // Determine trend using closed bar [1] relative to Supertrend line
+   double st[3], closeArr[3];
+   ArraySetAsSeries(st, true);
+   ArraySetAsSeries(closeArr, true);
+
+   if(CopyBuffer(hSupertrend, 0, 0, 3, st) < 3) return 0;
+   if(CopyClose(_Symbol, SignalTF, 0, 3, closeArr) < 3) return 0;
+   if(st[1] <= 0.0) return 0;
+
+   if(closeArr[1] > st[1]) return +1;
+   if(closeArr[1] < st[1]) return -1;
+   return 0;
+}
+
 bool BBReentrySignal(int dir) {
    // Long: bar[2] below lower band, bar[1] closes back inside + RSI cross above 30
    // Short: bar[2] above upper band, bar[1] closes back inside + RSI cross below 70
@@ -510,8 +528,9 @@ int OnInit() {
    hEMA50 = iMA(_Symbol, SignalTF, 50, 0, MODE_EMA, PRICE_CLOSE);
    hStdDev = iStdDev(_Symbol, SignalTF, 50, 0, MODE_SMA, PRICE_CLOSE);
    hBands = iBands(_Symbol, SignalTF, BBPeriod, 0, BBStdDev, PRICE_CLOSE);
+   hSupertrend = iCustom(_Symbol, SignalTF, "Examples\\Supertrend", SupertrendPeriod, SupertrendMult);
 
-   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE || hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE || hEMA50 == INVALID_HANDLE || hStdDev == INVALID_HANDLE || hBands == INVALID_HANDLE || ((UseADXFilter || UseMREntryFilter) && hADX == INVALID_HANDLE)) {
+   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE || hRSI == INVALID_HANDLE || hADX == INVALID_HANDLE || hATR == INVALID_HANDLE || hEMA50 == INVALID_HANDLE || hStdDev == INVALID_HANDLE || hBands == INVALID_HANDLE || hSupertrend == INVALID_HANDLE) {
       Print("Init failed: indicator handle invalid. err=", GetLastError());
       return INIT_FAILED;
    }
@@ -535,6 +554,7 @@ void OnDeinit(const int reason) {
    if(hEMA50 != INVALID_HANDLE) IndicatorRelease(hEMA50);
    if(hStdDev != INVALID_HANDLE) IndicatorRelease(hStdDev);
    if(hBands != INVALID_HANDLE) IndicatorRelease(hBands);
+   if(hSupertrend != INVALID_HANDLE) IndicatorRelease(hSupertrend);
 }
 
 void OnTick() {
@@ -577,6 +597,22 @@ void OnTick() {
       bool reentryOk = BBReentrySignal(dir);
       if(!(stretchOk && reentryOk)) {
          if(DebugLogs) PrintFormat("MR filter: blocked dir=%d stretch=%d reentry=%d regime=%s", dir, (int)stretchOk, (int)reentryOk, volRegime);
+         return;
+      }
+   }
+
+   if(volRegime == "HIGH" && dir != 0) {
+      double adxHigh[2];
+      ArraySetAsSeries(adxHigh, true);
+      if(CopyBuffer(hADX, 0, 0, 2, adxHigh) < 2) return;
+      if(adxHigh[1] < 20.0) {
+         if(DebugLogs) PrintFormat("HIGH regime filter: ADX too low (%.2f < 20)", adxHigh[1]);
+         return;
+      }
+
+      int stDir = SupertrendDirection();
+      if((dir > 0 && stDir <= 0) || (dir < 0 && stDir >= 0)) {
+         if(DebugLogs) PrintFormat("HIGH regime filter: Supertrend mismatch signal=%d supertrend=%d", dir, stDir);
          return;
       }
    }
