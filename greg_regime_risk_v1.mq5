@@ -1,6 +1,6 @@
 #property strict
-#property version   "1.22"
-#property description "Greg EA v1.22 - Trend + Pullback + ATR Risk + Smoothed Regime + Robust Sizing + Live Dashboard + BE"
+#property version   "1.23"
+#property description "Greg EA v1.23 - Improved Dashboard + Smoothed-ADX display + CSV Trade Logger + Regime edge-case fixes"
 
 #include <Trade/Trade.mqh>
 
@@ -59,6 +59,7 @@ input group "=== Misc ===";
 input long Magic = 13022026;
 input bool DebugLogs = false;            // Set to true only for debugging
 input bool ShowDashboard = true;        // Show chart comment dashboard
+input string TradeLogPath = "GregTradeLogger.csv"; // CSV log file (MQL5/Files/)
 
 // ========================= Indicator handles =========================
 int hFastEMA = INVALID_HANDLE;
@@ -330,8 +331,8 @@ double GetSmoothedADX() {
    if(adx[1] <= 0.0) return -1.0;
 
    double alpha = MathMax(0.0, MathMin(1.0, RegimeSmoothAlpha));
-   if(alpha <= 0.0) g_smoothedADX = adx[1];
-   else if(g_smoothedADX <= 0.0) g_smoothedADX = adx[1];
+   // Bootstrap: if alpha is effectively 0 OR we have no prior value, use raw ADX directly.
+   if(alpha <= 0.0 || g_smoothedADX <= 0.0) g_smoothedADX = adx[1];
    else g_smoothedADX = alpha * adx[1] + (1.0 - alpha) * g_smoothedADX;
 
    g_cachedAdxValue = g_smoothedADX;
@@ -356,8 +357,8 @@ string GetVolatilityRegime(double currentATR) {
 
    // Smooth ATR input to reduce abrupt regime flips.
    double alpha = MathMax(0.0, MathMin(1.0, RegimeSmoothAlpha));
-   if(alpha <= 0.0) g_smoothedATR = currentATR;
-   else if(g_smoothedATR <= 0.0) g_smoothedATR = currentATR;
+   // Bootstrap: if alpha is effectively 0 OR we have no prior value, use raw ATR directly.
+   if(alpha <= 0.0 || g_smoothedATR <= 0.0) g_smoothedATR = currentATR;
    else g_smoothedATR = alpha * currentATR + (1.0 - alpha) * g_smoothedATR;
 
    double atrEval = g_smoothedATR;
@@ -542,6 +543,8 @@ void PrintTradeJournal(ulong closeDealTicket) {
       exitPnl,
       durationBars
    );
+
+   LogTradeToCSV(closeDealTicket, exitPnl, pnlPips, durationBars);
 }
 
 
@@ -648,7 +651,7 @@ int OnInit() {
    trade.SetDeviationInPoints(20);
    g_lastClosedTradeTime = TimeCurrent();
 
-   if(DebugLogs) Print("Greg EA v1.22 initialized.");
+   if(DebugLogs) Print("Greg EA v1.23 initialized.");
    if(ShowDashboard) PrintDashboard();
    return INIT_SUCCEEDED;
 }
@@ -780,6 +783,65 @@ void OnTick() {
    }
 }
 
+// Writes a closed trade to CSV in MQL5/Files/.
+// Format: CloseTime,Symbol,Direction,Profit,RegimeAtEntry,ATR_at_entry,Pips,DurationBars
+void LogTradeToCSV(ulong closeDealTicket, double exitPnl, double pnlPips, int durationBars) {
+   if(closeDealTicket == 0) return;
+   if(!HistorySelect(0, TimeCurrent())) return;
+
+   long positionId = HistoryDealGetInteger(closeDealTicket, DEAL_POSITION_ID);
+   datetime exitTime = (datetime)HistoryDealGetInteger(closeDealTicket, DEAL_TIME);
+
+   // Find entry deal
+   ulong entryTicket = 0;
+   datetime entryTime = 0;
+   for(int i = 0; i < HistoryDealsTotal(); i++) {
+      ulong t = HistoryDealGetTicket(i);
+      if(t == 0) continue;
+      if(HistoryDealGetString(t, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(t, DEAL_MAGIC) != Magic) continue;
+      if(HistoryDealGetInteger(t, DEAL_POSITION_ID) != positionId) continue;
+      if(HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+      datetime tIn = (datetime)HistoryDealGetInteger(t, DEAL_TIME);
+      if(entryTicket == 0 || tIn < entryTime) {
+         entryTicket = t;
+         entryTime = tIn;
+      }
+   }
+   if(entryTicket == 0) return;
+
+   long entryType = HistoryDealGetInteger(entryTicket, DEAL_TYPE);
+   string direction = (entryType == DEAL_TYPE_BUY ? "BUY" : (entryType == DEAL_TYPE_SELL ? "SELL" : "N/A"));
+
+   string header = "CloseTime,Symbol,Direction,Profit,Regime,ATR,ATR_smooth,Pips,DurationBars";
+   string row = StringFormat("%s,%s,%s,%.2f,%s,%.5f,%.5f,%.1f,%d",
+      TimeToString(exitTime, TIME_DATE|TIME_MINUTES),
+      _Symbol,
+      direction,
+      exitPnl,
+      g_lastOpenRegimeAtEntry,
+      0.0,          // ATR-at-entry placeholder (0 — callers may override)
+      g_smoothedATR,
+      pnlPips,
+      durationBars
+   );
+
+   int fh = FileOpen(TradeLogPath, FILE_CSV|FILE_WRITE|FILE_SHARE_READ|FILE_SHARE_WRITE, ',', CP_ACP);
+   if(fh == INVALID_HANDLE) {
+      if(DebugLogs) PrintFormat("CSVLog: FileOpen failed for %s err=%d", TradeLogPath, GetLastError());
+      return;
+   }
+
+   // Append: seek to end
+   FileSeek(fh, 0, SEEK_END);
+   long fsize = FileTell(fh);
+   if(fsize == 0) FileWriteString(fh, header + "\r\n");
+   FileWriteString(fh, row + "\r\n");
+   FileClose(fh);
+
+   if(DebugLogs) PrintFormat("CSVLog: wrote row -> %s", row);
+}
+
 void PrintDashboard() {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    double bal = AccountInfoDouble(ACCOUNT_BALANCE);
@@ -804,32 +866,43 @@ void PrintDashboard() {
    else if(dir < 0) regimeStr = "SELL";
    else regimeStr = "NONE";
 
-   // ATR-based volatility regime awareness (raw ATR — compare to recent range for context)
+   // ATR-based volatility regime
    string volRegime = GetVolatilityRegime(atrVal);
 
+   // Fetch smoothed values for dashboard (evaluated on closed bar)
+   double smADX = GetSmoothedADX();
+   double smATR = g_smoothedATR;  // already computed by GetVolatilityRegime this bar
+   string smADXStr = (smADX > 0) ? StringFormat("%.1f", smADX) : "N/A";
+   string smATRStr = (smATR > 0) ? StringFormat("%.5f", smATR) : "N/A";
+
    string txt = StringFormat(
-      "Greg EA v1.2 | %s\n" +
-      "----------------------------\n" +
-      "Equity:   %.2f\n" +
-      "Balance:  %.2f\n" +
-      "Daily P&L: %.2f (%.2f%%)\n" +
-      "----------------------------\n" +
-      "Signal:   %s\n" +
-      "ATR(%d):  %.5f\n" +
-      "Vol:      %s\n" +
-      "Risk:     %.1f%% (eff %.2f%%) | SL:%.1f TP:%.1f\n" +
-      "----------------------------\n" +
-      "Consecutive Losses: %d\n" +
+      "Greg EA v1.23 | %s\n" +
+      "--------------------------------------------\n" +
+      "Equity:     %.2f\n" +
+      "Balance:    %.2f\n" +
+      "Daily P&L:  %.2f (%.2f%%)\n" +
+      "--------------------------------------------\n" +
+      "Dir:        %s\n" +
+      "ATR sm:     %s\n" +
+      "ADX sm:     %s\n" +
+      "Vol Regime: %s\n" +
+      "--------------------------------------------\n" +
+      "Risk:       %.1f%% (eff %.2f%%)\n" +
+      "SL mult:    %.1f   TP mult: %.1f\n" +
+      "--------------------------------------------\n" +
+      "Consec Losses: %d\n" +
       "Max Daily Loss: %.1f%%\n" +
-      "Max Consec Loss: %d\n" +
-      "----------------------------\n" +
+      "Max Consec:     %d\n" +
+      "--------------------------------------------\n" +
       "Position: %s",
       _Symbol,
       eq, bal, dailyPnl, (bal > 0 ? dailyPnl/bal*100 : 0),
       regimeStr,
-      ATRPeriod, atrVal,
+      smATRStr,
+      smADXStr,
       volRegime,
-      RiskPercent, g_lastEffectiveRiskPercent, ATR_SL_Mult, ATR_TP_Mult,
+      RiskPercent, g_lastEffectiveRiskPercent,
+      ATR_SL_Mult, ATR_TP_Mult,
       g_consecutiveLosses,
       MaxDailyLossPercent,
       MaxConsecutiveLosses,
