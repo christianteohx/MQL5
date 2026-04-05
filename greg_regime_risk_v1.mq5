@@ -1,6 +1,6 @@
 #property strict
-#property version   "1.20"
-#property description "Greg EA v1.2 - Trend + Pullback + ATR Risk + Live Dashboard + Vol Regime + BE"
+#property version   "1.21"
+#property description "Greg EA v1.21 - Trend + Pullback + ATR Risk + Vol-Scaled Sizing + Live Dashboard + BE"
 
 #include <Trade/Trade.mqh>
 
@@ -27,6 +27,11 @@ input bool UseTrailingStop = true;
 input double ATR_Trail_Mult = 1.2;
 input double MaxLotsCap = 1.0;           // hard cap safety
 input bool OnePositionPerSymbol = true;
+input bool UseVolatilityRiskScaling = true;
+input double LowVolRiskMult = 1.20;      // scale RiskPercent in LOW vol regime
+input double MidVolRiskMult = 1.00;      // scale RiskPercent in MID vol regime
+input double HighVolRiskMult = 0.70;     // scale RiskPercent in HIGH vol regime
+input double MinRiskPercentFloor = 0.10; // safety floor after scaling
 
 input group "=== Guardrails ===";
 input double MaxDailyLossPercent = 2.0;  // stop opening new trades after this
@@ -54,6 +59,7 @@ int hATR = INVALID_HANDLE;
 // ========================= State =========================
 datetime g_lastBarTime = 0;
 int g_consecutiveLosses = 0;
+double g_lastEffectiveRiskPercent = 0.0;
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -172,9 +178,9 @@ double ClampVolume(double lots) {
    return NormalizeDouble(lots, prec);
 }
 
-double LotsByRisk(double entryPrice, double slPrice) {
+double LotsByRisk(double entryPrice, double slPrice, double riskPercentToUse) {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
-   double riskMoney = eq * (RiskPercent / 100.0);
+   double riskMoney = eq * (riskPercentToUse / 100.0);
 
    double dist = MathAbs(entryPrice - slPrice);
    if(dist <= 0) return 0;
@@ -188,6 +194,19 @@ double LotsByRisk(double entryPrice, double slPrice) {
 
    double rawLots = riskMoney / moneyPerLotAtSL;
    return ClampVolume(rawLots);
+}
+
+double EffectiveRiskPercent(double atrVal) {
+   double eff = RiskPercent;
+   if(!UseVolatilityRiskScaling) return eff;
+
+   string vr = GetVolatilityRegime(atrVal);
+   if(vr == "LOW ") eff *= LowVolRiskMult;
+   else if(vr == "HIGH") eff *= HighVolRiskMult;
+   else eff *= MidVolRiskMult;
+
+   if(eff < MinRiskPercentFloor) eff = MinRiskPercentFloor;
+   return eff;
 }
 
 int SignalDirection(double &atrOut) {
@@ -372,7 +391,10 @@ void OnTick() {
       tp = NormalizeDouble(entry - ATR_TP_Mult * atr, digits);
    }
 
-   double lots = LotsByRisk(entry, sl);
+   double effRisk = EffectiveRiskPercent(atr);
+   g_lastEffectiveRiskPercent = effRisk;
+
+   double lots = LotsByRisk(entry, sl, effRisk);
    if(lots <= 0) {
       if(DebugLogs) Print("Skip: computed lots <= 0");
       return;
@@ -383,7 +405,7 @@ void OnTick() {
    else ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v1");
 
    if(DebugLogs) {
-      PrintFormat("Order dir=%d lots=%.2f entry=%.5f sl=%.5f tp=%.5f ok=%d ret=%d", dir, lots, entry, sl, tp, (int)ok, trade.ResultRetcode());
+      PrintFormat("Order dir=%d lots=%.2f entry=%.5f sl=%.5f tp=%.5f risk%%=%.2f ok=%d ret=%d", dir, lots, entry, sl, tp, effRisk, (int)ok, trade.ResultRetcode());
    }
 }
 
@@ -424,7 +446,7 @@ void PrintDashboard() {
       "Signal:   %s\n" +
       "ATR(%d):  %.5f\n" +
       "Vol:      %s\n" +
-      "Risk:     %.1f%% | SL:%.1f TP:%.1f\n" +
+      "Risk:     %.1f%% (eff %.2f%%) | SL:%.1f TP:%.1f\n" +
       "----------------------------\n" +
       "Consecutive Losses: %d\n" +
       "Max Daily Loss: %.1f%%\n" +
@@ -436,7 +458,7 @@ void PrintDashboard() {
       regimeStr,
       ATRPeriod, atrVal,
       volRegime,
-      RiskPercent, ATR_SL_Mult, ATR_TP_Mult,
+      RiskPercent, g_lastEffectiveRiskPercent, ATR_SL_Mult, ATR_TP_Mult,
       g_consecutiveLosses,
       MaxDailyLossPercent,
       MaxConsecutiveLosses,
