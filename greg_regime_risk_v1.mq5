@@ -85,6 +85,10 @@ double g_cachedATRp66 = 0.0;
 bool g_hasVolThresholdCache = false;
 datetime g_volRegimeEvalBarTime = 0;
 string g_cachedVolRegime = "N/A";
+double g_smoothedADX = 0.0;
+datetime g_adxCacheBarTime = 0;
+double g_cachedAdxValue = 0.0;
+bool g_hasAdxCache = false;
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -313,6 +317,27 @@ bool UpdateVolatilityThresholdCache() {
    g_volThresholdCacheBarTime = barTime;
    g_hasVolThresholdCache = true;
    return true;
+}
+
+double GetSmoothedADX() {
+   datetime barTime = iTime(_Symbol, SignalTF, 1); // closed bar
+   if(barTime == 0) return -1.0;
+   if(g_hasAdxCache && g_adxCacheBarTime == barTime) return g_cachedAdxValue;
+
+   double adx[2];
+   ArraySetAsSeries(adx, true);
+   if(CopyBuffer(hADX, 0, 0, 2, adx) < 2) return -1.0;
+   if(adx[1] <= 0.0) return -1.0;
+
+   double alpha = MathMax(0.0, MathMin(1.0, RegimeSmoothAlpha));
+   if(alpha <= 0.0) g_smoothedADX = adx[1];
+   else if(g_smoothedADX <= 0.0) g_smoothedADX = adx[1];
+   else g_smoothedADX = alpha * adx[1] + (1.0 - alpha) * g_smoothedADX;
+
+   g_cachedAdxValue = g_smoothedADX;
+   g_adxCacheBarTime = barTime;
+   g_hasAdxCache = true;
+   return g_cachedAdxValue;
 }
 
 string GetVolatilityRegime(double currentATR) {
@@ -668,11 +693,10 @@ void OnTick() {
    string volRegime = GetVolatilityRegime(atr);
    if(UseMREntryFilter && dir != 0 && (volRegime == "LOW" || volRegime == "MID")) {
       if(volRegime == "MID") {
-         double adxMid[2];
-         ArraySetAsSeries(adxMid, true);
-         if(CopyBuffer(hADX, 0, 0, 2, adxMid) < 2) return;
-         if(adxMid[1] >= MidRegimeADXMax) {
-            if(DebugLogs) PrintFormat("MR filter: MID regime ADX too high (%.2f >= %d)", adxMid[1], MidRegimeADXMax);
+         double adxMid = GetSmoothedADX();
+         if(adxMid <= 0.0) return;
+         if(adxMid >= MidRegimeADXMax) {
+            if(DebugLogs) PrintFormat("MR filter: MID regime ADX too high (%.2f >= %d)", adxMid, MidRegimeADXMax);
             return;
          }
       }
@@ -686,14 +710,13 @@ void OnTick() {
    }
 
    if(volRegime == "HIGH" && dir != 0) {
-      double adxHigh[2];
-      ArraySetAsSeries(adxHigh, true);
-      if(CopyBuffer(hADX, 0, 0, 2, adxHigh) < 2) {
+      double adxHigh = GetSmoothedADX();
+      if(adxHigh <= 0.0) {
          if(DebugLogs) Print("HIGH regime: ADX copy failed");
          return;
       }
-      if(adxHigh[1] < 20.0) {
-         if(DebugLogs) PrintFormat("HIGH regime filter: ADX too low (%.2f < 20)", adxHigh[1]);
+      if(adxHigh < 20.0) {
+         if(DebugLogs) PrintFormat("HIGH regime filter: ADX too low (%.2f < 20)", adxHigh);
          return;
       }
 
