@@ -79,6 +79,12 @@ datetime g_lastClosedTradeTime = 0;
 string g_lastOpenRegimeAtEntry = "N/A";
 string g_lastVolRegime = "N/A";
 double g_smoothedATR = 0.0;
+datetime g_volThresholdCacheBarTime = 0;
+double g_cachedATRp33 = 0.0;
+double g_cachedATRp66 = 0.0;
+bool g_hasVolThresholdCache = false;
+datetime g_volRegimeEvalBarTime = 0;
+string g_cachedVolRegime = "N/A";
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -272,12 +278,16 @@ int SignalDirection(double &atrOut) {
    return 0;
 }
 
-string GetVolatilityRegime(double currentATR) {
-   // Compute ATR percentile vs ATRLookback bars: LOW < 33rd, HIGH > 66th, else MID
+bool UpdateVolatilityThresholdCache() {
+   datetime barTime = iTime(_Symbol, SignalTF, 1); // closed bar
+   if(barTime == 0) return false;
+   if(g_hasVolThresholdCache && g_volThresholdCacheBarTime == barTime) return true;
+
+   // Compute ATR percentile vs ATRLookback closed bars: LOW < 33rd, HIGH > 66th, else MID
    double atrArr[];
    ArrayResize(atrArr, ATRLookback);
    ArraySetAsSeries(atrArr, true);
-   if(CopyBuffer(hATR, 0, 0, ATRLookback, atrArr) < ATRLookback) return "N/A";
+   if(CopyBuffer(hATR, 0, 1, ATRLookback, atrArr) < ATRLookback) return false;
 
    // Bubble sort to get percentiles (simple and reliable)
    for(int i = 0; i < ATRLookback - 1; i++) {
@@ -292,22 +302,47 @@ string GetVolatilityRegime(double currentATR) {
 
    int p33Idx = MathMax(0, MathMin(ATRLookback - 1, (int)MathRound(0.33 * ATRLookback) - 1));
    int p66Idx = MathMax(0, MathMin(ATRLookback - 1, (int)MathRound(0.66 * ATRLookback) - 1));
-   double p33 = atrArr[p33Idx];
-   double p66 = atrArr[p66Idx];
+   g_cachedATRp33 = atrArr[p33Idx];
+   g_cachedATRp66 = atrArr[p66Idx];
+   if(g_cachedATRp66 < g_cachedATRp33) {
+      double tmp = g_cachedATRp66;
+      g_cachedATRp66 = g_cachedATRp33;
+      g_cachedATRp33 = tmp;
+   }
+
+   g_volThresholdCacheBarTime = barTime;
+   g_hasVolThresholdCache = true;
+   return true;
+}
+
+string GetVolatilityRegime(double currentATR) {
+   datetime barTime = iTime(_Symbol, SignalTF, 1); // evaluate once per closed bar
+   if(barTime == 0) return "N/A";
+   if(g_volRegimeEvalBarTime == barTime) return g_cachedVolRegime;
+
+   if(!UpdateVolatilityThresholdCache()) return "N/A";
+
+   if(currentATR <= 0.0) {
+      double atr[2];
+      ArraySetAsSeries(atr, true);
+      if(CopyBuffer(hATR, 0, 0, 2, atr) < 2 || atr[1] <= 0.0) return "N/A";
+      currentATR = atr[1];
+   }
 
    // Smooth ATR input to reduce abrupt regime flips.
    double alpha = MathMax(0.0, MathMin(1.0, RegimeSmoothAlpha));
-   if(g_smoothedATR <= 0.0) g_smoothedATR = currentATR;
+   if(alpha <= 0.0) g_smoothedATR = currentATR;
+   else if(g_smoothedATR <= 0.0) g_smoothedATR = currentATR;
    else g_smoothedATR = alpha * currentATR + (1.0 - alpha) * g_smoothedATR;
 
    double atrEval = g_smoothedATR;
    if(atrEval <= 0.0) return "N/A";
 
    // Stateful hysteresis: only switch when crossing opposite side with margin.
-   double lowEnter  = p33 - RegimeHysteresis * p33;
-   double lowExit   = p33 + RegimeHysteresis * p33;
-   double highEnter = p66 + RegimeHysteresis * p66;
-   double highExit  = p66 - RegimeHysteresis * p66;
+   double lowEnter  = g_cachedATRp33 - RegimeHysteresis * g_cachedATRp33;
+   double lowExit   = g_cachedATRp33 + RegimeHysteresis * g_cachedATRp33;
+   double highEnter = g_cachedATRp66 + RegimeHysteresis * g_cachedATRp66;
+   double highExit  = g_cachedATRp66 - RegimeHysteresis * g_cachedATRp66;
 
    string prev = g_lastVolRegime;
    string next = "MID";
@@ -325,7 +360,9 @@ string GetVolatilityRegime(double currentATR) {
    }
 
    g_lastVolRegime = next;
-   return next;
+   g_cachedVolRegime = next;
+   g_volRegimeEvalBarTime = barTime;
+   return g_cachedVolRegime;
 }
 
 bool ZScoreStretch(int dir) {
