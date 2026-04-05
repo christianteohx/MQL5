@@ -599,7 +599,7 @@ void OnTick() {
          if(CopyBuffer(hADX, 0, 0, 2, adxMid) < 2) return;
          if(adxMid[1] >= MidRegimeADXMax) {
             if(DebugLogs) PrintFormat("MR filter: MID regime ADX too high (%.2f >= %d)", adxMid[1], MidRegimeADXMax);
-            dir = 0;  // block entry only, do not skip trailing
+            return;
          }
       }
 
@@ -614,13 +614,20 @@ void OnTick() {
    if(volRegime == "HIGH" && dir != 0) {
       double adxHigh[2];
       ArraySetAsSeries(adxHigh, true);
-      if(CopyBuffer(hADX, 0, 0, 2, adxHigh) < 2) return;
+      if(CopyBuffer(hADX, 0, 0, 2, adxHigh) < 2) {
+         if(DebugLogs) Print("HIGH regime: ADX copy failed");
+         return;
+      }
       if(adxHigh[1] < 20.0) {
          if(DebugLogs) PrintFormat("HIGH regime filter: ADX too low (%.2f < 20)", adxHigh[1]);
          return;
       }
 
       int stDir = SupertrendDirection();
+      if(stDir == 0) {
+         if(DebugLogs) Print("HIGH regime: Supertrend copy failed or zero");
+         return;
+      }
       if((dir > 0 && stDir <= 0) || (dir < 0 && stDir >= 0)) {
          if(DebugLogs) PrintFormat("HIGH regime filter: Supertrend mismatch signal=%d supertrend=%d", dir, stDir);
          return;
