@@ -2,6 +2,105 @@
 #property version   "1.23"
 #property description "Greg EA v1.23 - Improved Dashboard + Smoothed-ADX display + CSV Trade Logger + Regime edge-case fixes"
 
+/*
+================================================================================
+ Greg EA (greg_regime_risk_v1.mq5) - Documentation Summary
+--------------------------------------------------------------------------------
+ Version: 1.23
+ File: ~/Library/Application Support/net.metaquotes.wine.metatrader5/
+       drive_c/Program Files/MetaTrader 5/MQL5/Experts/Greg/greg_regime_risk_v1.mq5
+
+ Installation:
+ 1) Place this file in: MQL5/Experts/Greg/
+ 2) Ensure custom indicator exists: MQL5/Indicators/Examples/Supertrend.ex5
+ 3) Compile in MetaEditor (F7)
+ 4) Attach EA to chart and enable Algo Trading
+ 5) Optional logs:
+    - Dashboard: chart Comment() panel
+    - CSV journal: MQL5/Files/<TradeLogPath>
+
+ Inputs (what each input does)
+--------------------------------------------------------------------------------
+ [Core Strategy]
+ - SignalTF: timeframe used for all signal calculations.
+ - FastEMA / SlowEMA: trend filter pair (fast above slow = bullish bias).
+ - RSIPeriod: RSI lookback.
+ - ADXPeriod: ADX lookback.
+ - UseADXFilter: require ADX strength gate for baseline entries.
+ - ADXMin: minimum ADX when UseADXFilter is enabled.
+ - SupertrendPeriod / SupertrendMult: Supertrend settings (used in HIGH-vol regime gate).
+ - RSI_Buy_Min: minimum RSI for buy continuation.
+ - RSI_Sell_Max: maximum RSI for sell continuation.
+
+ [Risk / Trade Management]
+ - RiskPercent: base % equity risk per trade.
+ - ATR_SL_Mult: stop-loss distance = ATR * multiplier.
+ - ATR_TP_Mult: take-profit distance = ATR * multiplier.
+ - ATRPeriod: ATR lookback used for SL/TP and trailing inputs.
+ - UseTrailingStop: master toggle for ATR trailing logic.
+ - ATR_Trail_Mult: ATR multiplier for trailing SL updates.
+ - MaxLotsCap: hard cap on position size.
+ - OnePositionPerSymbol: prevent multiple simultaneous positions per symbol/magic.
+ - UseVolatilityRiskScaling: enable regime-based risk scaling.
+ - LowVolRiskMult / MidVolRiskMult / HighVolRiskMult: multipliers applied to RiskPercent by volatility regime.
+ - MinRiskPercentFloor: minimum effective risk after scaling.
+ - MaxBarsInTrade: time-based exit threshold (bars since entry).
+ - BBPeriod / BBStdDev: Bollinger settings for mean-reversion re-entry filter.
+ - ZScoreThreshold: minimum |z-score| stretch from EMA50 to qualify MR setup.
+ - MidRegimeADXMax: in MID regime, MR is blocked when smoothed ADX is too high.
+ - UseMREntryFilter: master toggle for LOW/MID regime MR filter stack.
+ - ATRLookback: bars used to compute ATR percentile thresholds (p33/p66).
+ - RegimeHysteresis: buffer around thresholds to reduce regime flip-flopping.
+ - RegimeSmoothAlpha: EMA smoothing alpha for ATR regime input and cached ADX smoothing.
+
+ [Guardrails]
+ - MaxDailyLossPercent: stop opening new trades after daily closed PnL breach.
+ - MaxConsecutiveLosses: stop opening new trades after N losing closes in a row.
+ - MaxSpreadPoints: max allowed spread in points for new entries.
+ - UseSessionFilter: restrict trading to session window.
+ - SessionStartHour / SessionEndHour: allowed server-time trading window.
+
+ [Breakeven / Risk-Free]
+ - BeThreshold: move SL to break-even when live reward:risk reaches threshold.
+
+ [Misc]
+ - Magic: EA magic number.
+ - DebugLogs: verbose logging toggle.
+ - ShowDashboard: chart dashboard on/off.
+ - TradeLogPath: CSV filename/path under MQL5/Files/.
+
+ Architecture decisions (regime, smoothing, caching)
+--------------------------------------------------------------------------------
+ 1) Hybrid regime-aware entry design:
+    - Base directional signal: EMA trend + RSI momentum (+ optional ADXMin).
+    - LOW/MID volatility: optional mean-reversion gate (z-score stretch + BB re-entry).
+    - HIGH volatility: continuation gate requiring smoothed ADX >= 20 and Supertrend alignment.
+
+ 2) Volatility regime classification via ATR percentiles:
+    - Regimes derived from ATR percentile thresholds over ATRLookback closed bars:
+      LOW < p33, MID between p33/p66, HIGH > p66.
+    - Thresholds are cached per closed bar (avoid recomputing every tick).
+
+ 3) Noise control through smoothing + hysteresis:
+    - ATR regime input is EMA-smoothed (RegimeSmoothAlpha).
+    - ADX value used by regime gates is EMA-smoothed and cached.
+    - Hysteresis adds enter/exit buffers around p33/p66 to reduce whipsaw regime flips.
+
+ 4) Deterministic closed-bar evaluation:
+    - Core signal/regime logic runs on new closed bars (reduces intrabar instability).
+
+ 5) Risk engine robustness:
+    - Position sizing uses OrderCalcProfit (currency-aware across symbol/account combinations).
+    - Volume clamped to broker min/max/step plus local MaxLotsCap.
+    - Guardrails: daily loss cap, consecutive-loss lockout, spread filter, session filter.
+
+ 6) Trade lifecycle + observability:
+    - Time-based management (force BE/close after MaxBarsInTrade).
+    - Breakeven transition before ATR trailing continuation.
+    - Trade journal printed on close + CSV logging for post-trade analysis.
+================================================================================
+*/
+
 #include <Trade/Trade.mqh>
 
 CTrade trade;
