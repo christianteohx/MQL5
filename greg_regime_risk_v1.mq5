@@ -32,6 +32,12 @@ input double LowVolRiskMult = 1.20;      // scale RiskPercent in LOW vol regime
 input double MidVolRiskMult = 1.00;      // scale RiskPercent in MID vol regime
 input double HighVolRiskMult = 0.70;     // scale RiskPercent in HIGH vol regime
 input double MinRiskPercentFloor = 0.10; // safety floor after scaling
+input int MaxBarsInTrade = 20;           // time-based exit threshold (bars)
+input int BBPeriod = 20;                 // Bollinger period
+input double BBStdDev = 2.0;             // Bollinger std dev
+input double ZScoreThreshold = 1.5;      // Min |z| for stretch
+input int MidRegimeADXMax = 25;          // Max ADX for MR in MID regime
+input bool UseMREntryFilter = true;      // Master toggle
 
 input group "=== Guardrails ===";
 input double MaxDailyLossPercent = 2.0;  // stop opening new trades after this
@@ -55,11 +61,16 @@ int hSlowEMA = INVALID_HANDLE;
 int hRSI = INVALID_HANDLE;
 int hADX = INVALID_HANDLE;
 int hATR = INVALID_HANDLE;
+int hEMA50 = INVALID_HANDLE;
+int hStdDev = INVALID_HANDLE;
+int hBands = INVALID_HANDLE;
 
 // ========================= State =========================
 datetime g_lastBarTime = 0;
 int g_consecutiveLosses = 0;
 double g_lastEffectiveRiskPercent = 0.0;
+datetime g_lastClosedTradeTime = 0;
+string g_lastOpenRegimeAtEntry = "N/A";
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -271,8 +282,147 @@ string GetVolatilityRegime(double currentATR) {
    return "MID ";
 }
 
+bool ZScoreStretch(int dir) {
+   // z = (Close - EMA50) / StdDev(50), evaluated on closed bar [1]
+   double ema50[2], sd50[2], closeArr[2];
+   ArraySetAsSeries(ema50, true);
+   ArraySetAsSeries(sd50, true);
+   ArraySetAsSeries(closeArr, true);
+
+   if(CopyBuffer(hEMA50, 0, 0, 2, ema50) < 2) return false;
+   if(CopyBuffer(hStdDev, 0, 0, 2, sd50) < 2) return false;
+   if(CopyClose(_Symbol, SignalTF, 0, 2, closeArr) < 2) return false;
+
+   if(sd50[1] <= 0.0) return false;
+
+   double z = (closeArr[1] - ema50[1]) / sd50[1];
+
+   if(dir > 0) return (z <= -ZScoreThreshold);
+   if(dir < 0) return (z >= ZScoreThreshold);
+   return false;
+}
+
+bool BBReentrySignal(int dir) {
+   // Long: bar[2] below lower band, bar[1] closes back inside + RSI cross above 30
+   // Short: bar[2] above upper band, bar[1] closes back inside + RSI cross below 70
+   double upper[3], lower[3], rsi[3], closeArr[3];
+   ArraySetAsSeries(upper, true);
+   ArraySetAsSeries(lower, true);
+   ArraySetAsSeries(rsi, true);
+   ArraySetAsSeries(closeArr, true);
+
+   if(CopyBuffer(hBands, 1, 0, 3, upper) < 3) return false;
+   if(CopyBuffer(hBands, 2, 0, 3, lower) < 3) return false;
+   if(CopyBuffer(hRSI, 0, 0, 3, rsi) < 3) return false;
+   if(CopyClose(_Symbol, SignalTF, 0, 3, closeArr) < 3) return false;
+
+   if(dir > 0) {
+      bool wasOutside = (closeArr[2] < lower[2]);
+      bool reentered = (closeArr[1] > lower[1]);
+      bool rsiCross = (rsi[2] <= 30.0 && rsi[1] > 30.0);
+      return (wasOutside && reentered && rsiCross);
+   }
+
+   if(dir < 0) {
+      bool wasOutside = (closeArr[2] > upper[2]);
+      bool reentered = (closeArr[1] < upper[1]);
+      bool rsiCross = (rsi[2] >= 70.0 && rsi[1] < 70.0);
+      return (wasOutside && reentered && rsiCross);
+   }
+
+   return false;
+}
+
+
+bool GetLatestClosedDealSince(datetime fromTime, ulong &dealTicketOut, datetime &dealTimeOut) {
+   dealTicketOut = 0;
+   dealTimeOut = 0;
+
+   datetime startTime = (fromTime > 0 ? fromTime : 0);
+   if(!HistorySelect(startTime, TimeCurrent())) return false;
+
+   int total = HistoryDealsTotal();
+   for(int i = total - 1; i >= 0; i--) {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+      if(HistoryDealGetString(ticket, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_MAGIC) != Magic) continue;
+      if(HistoryDealGetInteger(ticket, DEAL_ENTRY) != DEAL_ENTRY_OUT) continue;
+
+      datetime dt = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      if(dt <= fromTime) continue;
+
+      dealTicketOut = ticket;
+      dealTimeOut = dt;
+      return true;
+   }
+
+   return false;
+}
+
+void PrintTradeJournal(ulong closeDealTicket) {
+   if(closeDealTicket == 0) return;
+   if(!HistorySelect(0, TimeCurrent())) return;
+
+   long positionId = HistoryDealGetInteger(closeDealTicket, DEAL_POSITION_ID);
+   datetime exitTime = (datetime)HistoryDealGetInteger(closeDealTicket, DEAL_TIME);
+   double exitPrice = HistoryDealGetDouble(closeDealTicket, DEAL_PRICE);
+   double exitPnl = HistoryDealGetDouble(closeDealTicket, DEAL_PROFIT)
+                  + HistoryDealGetDouble(closeDealTicket, DEAL_SWAP)
+                  + HistoryDealGetDouble(closeDealTicket, DEAL_COMMISSION);
+
+   ulong entryDealTicket = 0;
+   datetime entryTime = 0;
+   for(int i = 0; i < HistoryDealsTotal(); i++) {
+      ulong t = HistoryDealGetTicket(i);
+      if(t == 0) continue;
+      if(HistoryDealGetString(t, DEAL_SYMBOL) != _Symbol) continue;
+      if(HistoryDealGetInteger(t, DEAL_MAGIC) != Magic) continue;
+      if(HistoryDealGetInteger(t, DEAL_POSITION_ID) != positionId) continue;
+      if(HistoryDealGetInteger(t, DEAL_ENTRY) != DEAL_ENTRY_IN) continue;
+
+      datetime tIn = (datetime)HistoryDealGetInteger(t, DEAL_TIME);
+      if(entryDealTicket == 0 || tIn < entryTime) {
+         entryDealTicket = t;
+         entryTime = tIn;
+      }
+   }
+   if(entryDealTicket == 0) return;
+
+   long entryType = HistoryDealGetInteger(entryDealTicket, DEAL_TYPE);
+   string direction = (entryType == DEAL_TYPE_BUY ? "BUY" : (entryType == DEAL_TYPE_SELL ? "SELL" : "N/A"));
+   double entryPrice = HistoryDealGetDouble(entryDealTicket, DEAL_PRICE);
+   double entrySL = HistoryDealGetDouble(entryDealTicket, DEAL_SL);
+   double entryTP = HistoryDealGetDouble(entryDealTicket, DEAL_TP);
+
+   double pipSize = (_Digits == 3 || _Digits == 5) ? (10.0 * _Point) : _Point;
+   double pnlPips = (direction == "BUY")
+      ? ((exitPrice - entryPrice) / pipSize)
+      : ((direction == "SELL") ? ((entryPrice - exitPrice) / pipSize) : 0.0);
+
+   int entryBarShift = iBarShift(_Symbol, SignalTF, entryTime, false);
+   int exitBarShift = iBarShift(_Symbol, SignalTF, exitTime, false);
+   int durationBars = 0;
+   if(entryBarShift >= 0 && exitBarShift >= 0) durationBars = MathAbs(entryBarShift - exitBarShift);
+
+   PrintFormat(
+      "[TradeJournal] EntryTime=%s Dir=%s Entry=%.5f SL=%.5f TP=%.5f RegimeAtEntry=%s | ExitTime=%s Exit=%.5f PnL=%.1f pips (%.2f) DurationBars=%d",
+      TimeToString(entryTime, TIME_DATE|TIME_MINUTES),
+      direction,
+      entryPrice,
+      entrySL,
+      entryTP,
+      g_lastOpenRegimeAtEntry,
+      TimeToString(exitTime, TIME_DATE|TIME_MINUTES),
+      exitPrice,
+      pnlPips,
+      exitPnl,
+      durationBars
+   );
+}
+
+
 void ManageTrailing(double atrVal) {
-   if(!UseTrailingStop) return;
    if(!PositionSelect(_Symbol)) return;
    if(PositionGetInteger(POSITION_MAGIC) != Magic) return;
 
@@ -280,10 +430,32 @@ void ManageTrailing(double atrVal) {
    double sl = PositionGetDouble(POSITION_SL);
    double tp = PositionGetDouble(POSITION_TP);
    double entry = PositionGetDouble(POSITION_PRICE_OPEN);
+   datetime entryTime = (datetime)PositionGetInteger(POSITION_TIME);
    double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
    double spread = SymbolInfoInteger(_Symbol, SYMBOL_SPREAD) * _Point;
    int digits = (int)SymbolInfoInteger(_Symbol, SYMBOL_DIGITS);
+
+   // ----- Time-based exit: after MaxBarsInTrade bars, force to BE or close -----
+   int barsOpen = iBarShift(_Symbol, SignalTF, entryTime, false);
+   if(MaxBarsInTrade > 0 && barsOpen > MaxBarsInTrade) {
+      double beSL = (type == POSITION_TYPE_BUY) ? entry : (entry + spread);
+      beSL = NormalizeDouble(beSL, digits);
+
+      bool beSet = true;
+      if(type == POSITION_TYPE_BUY) {
+         if(sl == 0.0 || sl < beSL) beSet = trade.PositionModify(_Symbol, beSL, tp);
+      } else if(type == POSITION_TYPE_SELL) {
+         if(sl == 0.0 || sl > beSL) beSet = trade.PositionModify(_Symbol, beSL, tp);
+      }
+
+      if(!beSet) {
+         trade.PositionClose(_Symbol);
+      }
+      return;
+   }
+
+   if(!UseTrailingStop) return;
 
    // ----- Breakeven (risk-free trade) -----
    if(sl != 0.0) {
@@ -335,14 +507,18 @@ int OnInit() {
    hRSI = iRSI(_Symbol, SignalTF, RSIPeriod, PRICE_CLOSE);
    hADX = iADX(_Symbol, SignalTF, ADXPeriod);
    hATR = iATR(_Symbol, SignalTF, ATRPeriod);
+   hEMA50 = iMA(_Symbol, SignalTF, 50, 0, MODE_EMA, PRICE_CLOSE);
+   hStdDev = iStdDev(_Symbol, SignalTF, 50, 0, MODE_SMA, PRICE_CLOSE);
+   hBands = iBands(_Symbol, SignalTF, BBPeriod, 0, BBStdDev, PRICE_CLOSE);
 
-   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE || hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE || (UseADXFilter && hADX == INVALID_HANDLE)) {
+   if(hFastEMA == INVALID_HANDLE || hSlowEMA == INVALID_HANDLE || hRSI == INVALID_HANDLE || hATR == INVALID_HANDLE || hEMA50 == INVALID_HANDLE || hStdDev == INVALID_HANDLE || hBands == INVALID_HANDLE || ((UseADXFilter || UseMREntryFilter) && hADX == INVALID_HANDLE)) {
       Print("Init failed: indicator handle invalid. err=", GetLastError());
       return INIT_FAILED;
    }
 
    trade.SetExpertMagicNumber(Magic);
    trade.SetDeviationInPoints(20);
+   g_lastClosedTradeTime = TimeCurrent();
 
    if(DebugLogs) Print("Greg EA v1.2 initialized.");
    if(ShowDashboard) PrintDashboard();
@@ -356,12 +532,25 @@ void OnDeinit(const int reason) {
    if(hRSI != INVALID_HANDLE) IndicatorRelease(hRSI);
    if(hADX != INVALID_HANDLE) IndicatorRelease(hADX);
    if(hATR != INVALID_HANDLE) IndicatorRelease(hATR);
+   if(hEMA50 != INVALID_HANDLE) IndicatorRelease(hEMA50);
+   if(hStdDev != INVALID_HANDLE) IndicatorRelease(hStdDev);
+   if(hBands != INVALID_HANDLE) IndicatorRelease(hBands);
 }
 
 void OnTick() {
    if(!IsNewBar(SignalTF)) return;
 
    if(ShowDashboard) PrintDashboard();
+
+   bool hasOpenPosition = HasOpenPosition();
+   if(!hasOpenPosition) {
+      ulong closedDealTicket = 0;
+      datetime closedDealTime = 0;
+      if(GetLatestClosedDealSince(g_lastClosedTradeTime, closedDealTicket, closedDealTime)) {
+         PrintTradeJournal(closedDealTicket);
+         g_lastClosedTradeTime = closedDealTime;
+      }
+   }
 
    if(!SessionAllowed()) return;
    if(!SpreadPass()) return;
@@ -372,7 +561,27 @@ void OnTick() {
 
    ManageTrailing(atr);
 
-   if(OnePositionPerSymbol && HasOpenPosition()) return;
+   string volRegime = GetVolatilityRegime(atr);
+   if(UseMREntryFilter && dir != 0 && (volRegime == "LOW " || volRegime == "MID ")) {
+      if(volRegime == "MID ") {
+         double adxMid[2];
+         ArraySetAsSeries(adxMid, true);
+         if(CopyBuffer(hADX, 0, 0, 2, adxMid) < 2) return;
+         if(adxMid[1] >= MidRegimeADXMax) {
+            if(DebugLogs) PrintFormat("MR filter: MID regime ADX too high (%.2f >= %d)", adxMid[1], MidRegimeADXMax);
+            return;
+         }
+      }
+
+      bool stretchOk = ZScoreStretch(dir);
+      bool reentryOk = BBReentrySignal(dir);
+      if(!(stretchOk && reentryOk)) {
+         if(DebugLogs) PrintFormat("MR filter: blocked dir=%d stretch=%d reentry=%d regime=%s", dir, (int)stretchOk, (int)reentryOk, volRegime);
+         return;
+      }
+   }
+
+   if(OnePositionPerSymbol && hasOpenPosition) return;
    if(dir == 0) return;
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -403,6 +612,10 @@ void OnTick() {
    bool ok = false;
    if(dir > 0) ok = trade.Buy(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v1");
    else ok = trade.Sell(lots, _Symbol, 0.0, sl, tp, "greg_regime_risk_v1");
+
+   if(ok) {
+      g_lastOpenRegimeAtEntry = volRegime;
+   }
 
    if(DebugLogs) {
       PrintFormat("Order dir=%d lots=%.2f entry=%.5f sl=%.5f tp=%.5f risk%%=%.2f ok=%d ret=%d", dir, lots, entry, sl, tp, effRisk, (int)ok, trade.ResultRetcode());
