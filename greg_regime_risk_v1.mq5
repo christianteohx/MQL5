@@ -481,6 +481,10 @@ void ManageTrailing(double atrVal) {
 
    if(!UseTrailingStop) return;
 
+   // If ATR is unavailable this bar, skip ATR-dependent trailing logic.
+   // (Time-exit and hard-close path above still executes.)
+   if(atrVal <= 0.0) return;
+
    // ----- Breakeven (risk-free trade) -----
    if(sl != 0.0) {
       double riskDist = 0.0;
