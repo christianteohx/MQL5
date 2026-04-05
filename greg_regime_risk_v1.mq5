@@ -1,6 +1,6 @@
 #property strict
-#property version   "1.21"
-#property description "Greg EA v1.21 - Trend + Pullback + ATR Risk + Vol-Scaled Sizing + Live Dashboard + BE"
+#property version   "1.22"
+#property description "Greg EA v1.22 - Trend + Pullback + ATR Risk + Smoothed Regime + Robust Sizing + Live Dashboard + BE"
 
 #include <Trade/Trade.mqh>
 
@@ -42,6 +42,7 @@ input int MidRegimeADXMax = 25;          // Max ADX for MR in MID regime
 input bool UseMREntryFilter = true;      // Master toggle
 input int ATRLookback = 100;            // Lookback bars for ATR percentile regime
 input double RegimeHysteresis = 0.05;    // ATR must exceed threshold by this much to switch
+input double RegimeSmoothAlpha = 0.35;   // EMA smoothing factor for ATR used in regime classification
 
 input group "=== Guardrails ===";
 input double MaxDailyLossPercent = 2.0;  // stop opening new trades after this
@@ -76,6 +77,8 @@ int g_consecutiveLosses = 0;
 double g_lastEffectiveRiskPercent = 0.0;
 datetime g_lastClosedTradeTime = 0;
 string g_lastOpenRegimeAtEntry = "N/A";
+string g_lastVolRegime = "N/A";
+double g_smoothedATR = 0.0;
 
 // ========================= Helpers =========================
 bool IsNewBar(ENUM_TIMEFRAMES tf) {
@@ -197,16 +200,24 @@ double ClampVolume(double lots) {
 double LotsByRisk(double entryPrice, double slPrice, double riskPercentToUse) {
    double eq = AccountInfoDouble(ACCOUNT_EQUITY);
    double riskMoney = eq * (riskPercentToUse / 100.0);
+   if(riskMoney <= 0.0) return 0.0;
 
    double dist = MathAbs(entryPrice - slPrice);
-   if(dist <= 0) return 0;
+   if(dist <= 0.0) return 0.0;
 
-   double tickValue = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
-   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
-   if(tickValue <= 0 || tickSize <= 0) return 0;
+   // Respect broker minimum stop distance for safer sizing in ultra-low ATR conditions.
+   double stopsLevelPts = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopDist = stopsLevelPts * _Point;
+   if(minStopDist > 0.0 && dist < minStopDist) dist = minStopDist;
 
-   double moneyPerLotAtSL = (dist / tickSize) * tickValue;
-   if(moneyPerLotAtSL <= 0) return 0;
+   // Robust risk-per-lot in account currency via OrderCalcProfit (avoids tick-value edge cases).
+   ENUM_ORDER_TYPE calcType = (slPrice < entryPrice ? ORDER_TYPE_BUY : ORDER_TYPE_SELL);
+   double slCalc = (calcType == ORDER_TYPE_BUY) ? (entryPrice - dist) : (entryPrice + dist);
+   double oneLotLoss = 0.0;
+   if(!OrderCalcProfit(calcType, _Symbol, 1.0, entryPrice, slCalc, oneLotLoss)) return 0.0;
+
+   double moneyPerLotAtSL = MathAbs(oneLotLoss);
+   if(moneyPerLotAtSL <= 0.0) return 0.0;
 
    double rawLots = riskMoney / moneyPerLotAtSL;
    return ClampVolume(rawLots);
@@ -217,7 +228,7 @@ double EffectiveRiskPercent(double atrVal) {
    if(!UseVolatilityRiskScaling) return eff;
 
    string vr = GetVolatilityRegime(atrVal);
-   if(vr == "LOW ") eff *= LowVolRiskMult;
+   if(vr == "LOW") eff *= LowVolRiskMult;
    else if(vr == "HIGH") eff *= HighVolRiskMult;
    else eff *= MidVolRiskMult;
 
@@ -263,7 +274,6 @@ int SignalDirection(double &atrOut) {
 
 string GetVolatilityRegime(double currentATR) {
    // Compute ATR percentile vs ATRLookback bars: LOW < 33rd, HIGH > 66th, else MID
-   // Hysteresis: must exceed threshold by RegimeHysteresis * p33/p66 to switch
    double atrArr[];
    ArrayResize(atrArr, ATRLookback);
    ArraySetAsSeries(atrArr, true);
@@ -285,10 +295,37 @@ string GetVolatilityRegime(double currentATR) {
    double p33 = atrArr[p33Idx];
    double p66 = atrArr[p66Idx];
 
-   // Apply hysteresis to avoid oscillation at boundaries
-   if(currentATR < p33 - RegimeHysteresis * p33) return "LOW ";
-   if(currentATR > p66 + RegimeHysteresis * p66) return "HIGH";
-   return "MID ";
+   // Smooth ATR input to reduce abrupt regime flips.
+   double alpha = MathMax(0.0, MathMin(1.0, RegimeSmoothAlpha));
+   if(g_smoothedATR <= 0.0) g_smoothedATR = currentATR;
+   else g_smoothedATR = alpha * currentATR + (1.0 - alpha) * g_smoothedATR;
+
+   double atrEval = g_smoothedATR;
+   if(atrEval <= 0.0) return "N/A";
+
+   // Stateful hysteresis: only switch when crossing opposite side with margin.
+   double lowEnter  = p33 - RegimeHysteresis * p33;
+   double lowExit   = p33 + RegimeHysteresis * p33;
+   double highEnter = p66 + RegimeHysteresis * p66;
+   double highExit  = p66 - RegimeHysteresis * p66;
+
+   string prev = g_lastVolRegime;
+   string next = "MID";
+
+   if(prev == "LOW") {
+      if(atrEval >= lowExit) next = "MID";
+      else next = "LOW";
+   } else if(prev == "HIGH") {
+      if(atrEval <= highExit) next = "MID";
+      else next = "HIGH";
+   } else {
+      if(atrEval < lowEnter) next = "LOW";
+      else if(atrEval > highEnter) next = "HIGH";
+      else next = "MID";
+   }
+
+   g_lastVolRegime = next;
+   return next;
 }
 
 bool ZScoreStretch(int dir) {
@@ -488,24 +525,24 @@ void ManageTrailing(double atrVal) {
    // ----- Breakeven (risk-free trade) -----
    if(sl != 0.0) {
       double riskDist = 0.0;
-      double rewardDist = 0.0;
+      double favorableDist = 0.0;
 
       if(type == POSITION_TYPE_BUY) {
          riskDist = entry - sl;
-         rewardDist = tp - entry;
+         favorableDist = bid - entry;
       } else if(type == POSITION_TYPE_SELL) {
          riskDist = sl - entry;
-         rewardDist = entry - tp;
+         favorableDist = entry - ask;
       }
 
-      if(riskDist > 0 && rewardDist > 0) {
-         double rr = rewardDist / riskDist;
+      if(riskDist > 0 && favorableDist > 0) {
+         double rr = favorableDist / riskDist;
          if(rr >= BeThreshold) {
-            // Move SL to entry (- spread buffer for sells to lock profit at/below entry)
+            // Move SL to entry (- spread buffer for sells to avoid premature stopouts)
             double newSL = (type == POSITION_TYPE_BUY) ? entry : entry - spread;
             newSL = NormalizeDouble(newSL, digits);
             if(newSL != sl) {
-               if(DebugLogs) PrintFormat("BE triggered: rr=%.2f, moving SL from %.5f to %.5f", rr, sl, newSL);
+               if(DebugLogs) PrintFormat("BE triggered: liveRR=%.2f, moving SL from %.5f to %.5f", rr, sl, newSL);
                trade.PositionModify(_Symbol, newSL, tp);
                return;  // skip trailing while at be
             }
@@ -549,7 +586,7 @@ int OnInit() {
    trade.SetDeviationInPoints(20);
    g_lastClosedTradeTime = TimeCurrent();
 
-   if(DebugLogs) Print("Greg EA v1.2 initialized.");
+   if(DebugLogs) Print("Greg EA v1.22 initialized.");
    if(ShowDashboard) PrintDashboard();
    return INIT_SUCCEEDED;
 }
@@ -592,8 +629,8 @@ void OnTick() {
    ManageTrailing(atr);
 
    string volRegime = GetVolatilityRegime(atr);
-   if(UseMREntryFilter && dir != 0 && (volRegime == "LOW " || volRegime == "MID ")) {
-      if(volRegime == "MID ") {
+   if(UseMREntryFilter && dir != 0 && (volRegime == "LOW" || volRegime == "MID")) {
+      if(volRegime == "MID") {
          double adxMid[2];
          ArraySetAsSeries(adxMid, true);
          if(CopyBuffer(hADX, 0, 0, 2, adxMid) < 2) return;
@@ -653,6 +690,14 @@ void OnTick() {
       tp = NormalizeDouble(entry - ATR_TP_Mult * atr, digits);
    }
 
+   // Ensure SL respects broker minimum stop distance.
+   double stopsLevelPts = (double)SymbolInfoInteger(_Symbol, SYMBOL_TRADE_STOPS_LEVEL);
+   double minStopDist = stopsLevelPts * _Point;
+   if(minStopDist > 0.0) {
+      if(dir > 0 && (entry - sl) < minStopDist) sl = NormalizeDouble(entry - minStopDist, digits);
+      if(dir < 0 && (sl - entry) < minStopDist) sl = NormalizeDouble(entry + minStopDist, digits);
+   }
+
    double effRisk = EffectiveRiskPercent(atr);
    g_lastEffectiveRiskPercent = effRisk;
 
@@ -695,8 +740,8 @@ void PrintDashboard() {
    string regimeStr = "N/A";
    double atrVal = 0;
    int dir = SignalDirection(atrVal);
-   if(dir > 0) regimeStr = "BUY ";
-   else if(dir < 0) regimeStr = "SELL ";
+   if(dir > 0) regimeStr = "BUY";
+   else if(dir < 0) regimeStr = "SELL";
    else regimeStr = "NONE";
 
    // ATR-based volatility regime awareness (raw ATR — compare to recent range for context)
