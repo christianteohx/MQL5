@@ -366,15 +366,15 @@ double OnTester()
    }
 
    //--- Top-5 purge
-   string files[];
-   ArrayResize(files, 0);
+   string csvFiles[];
+   ArrayResize(csvFiles, 0);
 
-   long searchHandle = FileFindFirst("ClawRev_*.csv", files);
+   long searchHandle = FileFindFirst("ClawRev_*.csv", csvFiles);
    if(searchHandle != INVALID_HANDLE)
    {
       do
       {
-         string fn = files[0];
+         string fn = csvFiles[0];
          int lastUs = StringFind(fn, "_", StringFind(fn, "_") + 1);
          int lastDot = StringFind(fn, ".csv");
          string resultStr = StringSubstr(fn, lastUs + 1, lastDot - lastUs - 1);
@@ -384,7 +384,7 @@ double OnTester()
          {
             FileDelete(fn);
          }
-      } while(FileFindNext(searchHandle, files));
+      } while(FileFindNext(searchHandle, csvFiles));
       FileFindClose(searchHandle);
    }
 
