@@ -1,142 +1,222 @@
-04_ML_PERCEPTRON_PLAN
+# 04_ML_PERCEPTRON_PLAN — ML Perceptron for Regime Classification
 
-1. MQL5 ML Approaches (with pros/cons/feasibility)
+**Status**: DECISION MADE — see Section 1
+**Updated**: 2026-04-08
 
-- MLPBuffer (MQL5 native) — does it work? performance? limitations?
-  - Overview: MLPBuffer is an approach that uses MQL5-native data structures and the MQL5 Machine Learning helpers (if available) to store small neural network weights and perform simple forward passes directly inside an Expert Advisor (EA). In practice this usually means implementing a compact perceptron or small multi-layer perceptron with hand-crafted matrix ops and activation functions in MQL5 code, or translating a trained small model into arrays of coefficients embedded in the EA.
-  - Pros: Native execution (no external dependencies), simple deployment, no IPC latency, works offline inside the terminal and is easy to version with the EA.
-  - Cons: MQL5's language and runtime are not designed for heavy numeric computation — vectorized operations are slow, memory is limited, and implementing training inside MQL5 is impractical. Complex models or frequent retraining are not realistic. Also, numerical precision and advanced activation functions / layers are cumbersome to implement.
-  - Feasibility: Medium for inference with very small models (e.g., single hidden layer perceptron with tens of neurons); low for anything larger. Best used for lightweight inference only, with training done externally.
+---
 
-- ONNX Runtime in MQL5 — possible? constraints?
-  - Overview: ONNX Runtime is a cross-platform inference engine capable of running complex models in many languages. Running ONNX in MQL5 would require either a bridging DLL (Windows) or a custom wrapper that exposes inference calls to MQL5's Import mechanism.
-  - Pros: Can run complex modern architectures and leverage optimized CPU/GPU execution. Standardized model format.
-  - Cons: Integration complexity is high. MQL5 runs inside MT5 which restricts dynamic linking and sandboxing; deploying and calling a custom DLL can be non-trivial and may run into policy or platform limitations. Cross-platform portability is limited (MT5 on Mac uses different layers), and distribution requires shipping external binaries which reduces portability and increases the chance of compatibility and security issues.
-  - Feasibility: Low to Medium. Technically possible on Windows if you can supply a stable, trusted DLL and handle ABI and threading carefully. Generally not recommended unless you have strong devops and control of the target environment.
+## 1. Decision: Perceptron over HMM
 
-- Python writes to CSV/JSON → MQL5 reads each bar — simplest approach, works offline
-  - Overview: Train and run predictions in Python (scikit-learn, PyTorch, TensorFlow). Export per-bar predictions (or model outputs) to CSV/JSON file. Have the EA read the file on each new completed bar and use the predictions for decision logic.
-  - Pros: Simple to implement, flexible (full Python ecosystems available), decouples training/inference from MQL5. Easy to retrain, validate, and version. Platform-agnostic (works wherever Python can run).
-  - Cons: Slight IPC latency (file I/O), potential sync issues (ensure read happens after write, use atomic rename pattern), requires an external process for runtime predictions or scheduled prediction exports. Not real-time per tick but perfectly acceptable for bar-based strategies.
-  - Feasibility: High. This is the practical approach used by many practitioners.
+### Comparison Table
 
-- MT5 built-in ensemble classes
-  - Overview: MQL5 ships with some statistical helpers and higher-level classes that can be used to build ensembles or do simple machine-learning-like logic. These are limited compared to modern ML frameworks but can be combined with technical indicators.
-  - Pros: Native, no external dependencies, low latency.
-  - Cons: Limited flexibility and model complexity.
-  - Feasibility: Medium for rule-based ensembles and simple parametric models.
+| Criterion | Perceptron / MLP | Hidden Markov Model (HMM) |
+|-----------|-----------------|--------------------------|
+| **MQL5 inference path** | Train in Python → export params/CSV → read in EA | Train in Python → export transition matrix + emission params → compute forward pass in MQL5 |
+| **Real-time complexity** | O(features × hidden) per forward pass — trivial for small nets | O(states²) per step for Viterbi/forward algorithm — also cheap, but requires matrix operations in MQL5 |
+| **Small dataset fit** | Good if using regularization; works with sklearn Perceptron on <1000 samples | GaussianHMM needs enough data to estimate covariances; struggles with <500-1000 rows |
+| **Out-of-sample generalization** | Depends on regularization and feature normalization; prone to overfitting without walk-forward validation | Markov property + transition matrix gives temporal smoothness; but emission parameters can overfit market-specific patterns |
+| **Regime label alignment** | Supervised — can train to reproduce ATR percentile labels exactly | Unsupervised — HMM states are latent and not guaranteed to align with LOW/MID/HIGH |
+| **Predicting transitions** | Natural: treat "next regime" as label, feed sequence features | Natural: HMM is already a transition model |
+| **MQL5 implementation effort** | Low — just array lookups and a few multiply-adds | Medium — need matrix multiply, exponentials for forward pass |
 
-- What MQL5 community actually uses successfully
-  - Practical community patterns favor external training/inference with Python or R and exporting signals to MQL5 via CSV, shared memory, local sockets, or lightweight DLLs. Very few rely on heavy in-EA ML stacks. Logistic regression, small perceptrons translated into arrays, and feature-engineered rule models are common.
+### Rationale
 
-2. Perceptron Design
+The existing regime pipeline already labels regimes using **ATR percentile** (LOW/MID/HIGH = 0/1/2). This gives us a **supervised labeling scheme** from day one. A perceptron trained to predict those same labels:
 
-- Features
-  - Indicator values: normalized values from RSI, MACD, moving averages, ATR-normalized returns, Bollinger band z-score. Use normalized representations rather than raw prices.
-  - Regime state: discrete or continuous regime indicator (e.g., trend vs. mean-reversion, or a 0-1 probability). This can be a feature produced by a separate regime classifier or from macro features (ADX, 200-day MA crossing, VIX proxy).
-  - Volatility ratio: current ATR / rolling ATR mean, or realized volatility ratio to capture regimes of risk.
-  - Momentum: N-bar returns across multiple horizons (1, 5, 20 bars), normalized.
-  - Volume or tick activity: where available — normalized to z-scores per instrument/time-of-day.
+- Aligns with the existing ATR percentile regime detector (not a black-box competing with it)
+- Can use the same features already computed in `data_fetcher.py`
+- Is a **static classifier**: no temporal state needed if we frame features correctly (e.g., rolling stats, lagged values)
+- Deploys via the proven **Python → CSV → MQL5 read** bridge already documented in this plan
+- Is simpler to validate: accuracy/F1 on held-out data is directly interpretable
 
-- Output options
-  - Confidence multiplier: scalar in [0,2] used to scale position size or signal strength.
-  - Buy/sell/neutral probabilities / discrete decisions: either softprobabilities from a sigmoid/softmax or hard decisions after thresholding.
-  - Regime probability: model outputs probability of regime label (if trained for regime), which downstream logic can use to switch weights.
+**HMM is not rejected** — it is already in the pipeline (`label_generator.hmm_labels`) as an *alternative labeler*. But for **real-time inference inside MT5**, the perceptron is the better production choice.
 
-- Architecture example
-  - Simple 2-layer perceptron: Input vector → Dense hidden layer (ReLU) → Output layer (sigmoid for binary outcome or linear + softmax for multi-class). Hidden layer size: 8–64 neurons depending on feature count.
-  - Activation choices: ReLU or LeakyReLU in hidden layer, sigmoid at output for binary, softmax for multi-class.
+**Go/No-Go: GO — Perceptron**
 
-- Normalization
-  - Use per-feature z-score normalization (mean, std dev) computed over a rolling window or computed on training set and stored. Alternatively min-max scaling with clipped extreme values. Always apply the same normalization in Python during training and in MQL5 at inference time.
+---
 
-3. Label Generation
+## 2. Implementation Sketch
 
-- Forward returns
-  - Label using forward returns over an N-bar horizon (e.g., 5, 10, 20 bars). For classification, set label to 1 if forward return > threshold, 0 otherwise. Threshold can be 0 or transaction-cost-adjusted (e.g., > spread+slippage).
+### 2a. Integration Architecture
 
-- Backtest P&L outcome as label
-  - Generate labels by simulating the EA’s trading logic on historical data and marking whether the trade at that bar would have been profitable after costs. This aligns model objectives to P&L but risks overfitting to the backtest-specific rules.
+```
+Python Training Pipeline          MQL5 EA (Greg / ClawTrend / ClawRev)
+─────────────────────────         ─────────────────────────────────────
+1. Load OHLCV from CSV            7. OnNewBar() trigger
+2. Compute features               8. Read predictions.csv
+3. Generate labels                9. Extract [symbol, bar_time, regime_pred, confidence]
+   (ATR percentile or             10. Apply as confidence multiplier
+   forward-return-based)               to existing ensemble signal
+4. Train sklearn MLP / Perceptron
+5. Walk-forward validate           File bridge (same pattern as backtest_analyzer.py):
+6. Export:                                 Python writes predictions_YYYYMMDD.csv
+   - predictions CSV (bar_time,            MQL5 reads latest predictions CSV,
+     regime_pred, confidence)              checks bar_time match, applies
+   - norm_params.json                      Use atomic rename for write safety
+     (feature means/stdevs)
+```
 
-- Avoid look-ahead bias
-  - Use only closed-bar data as inputs. Labels are forward returns computed on subsequent bars and should never be fed back into features. When using N-bar forward returns, ensure there is at least a 1-bar lag between the last input bar and the start of the label window if the EA would only act on bar close.
+### 2b. Perceptron Architecture
 
-- Self-supervised alternatives
-  - Train to predict next-bar return direction or multi-horizon returns directly, which can work as a lightweight signal and requires no complex labeling pipeline.
+**Task**: Classify next bar's regime (LOW=0 / MID=1 / HIGH=2) using features available at bar close.
 
-4. Integration Patterns
+**Input features** (from `data_fetcher.py`, all normalized with z-score):
 
-- Option A: ML as gate
-  - ML model acts as a gating function. For instance, only allow signals from the primary system to execute when ML confidence > threshold. This reduces false positives and is conservative.
+| Feature | Source | Description |
+|---------|--------|-------------|
+| `atr_pct` | ATR percentile rolling | Current volatility percentile rank |
+| `adx_val` | ADX 14 | Trend strength |
+| `rsi_14` | RSI 14 | Overbought/oversold |
+| `macd_norm` | MACD / ATR | Normalized momentum |
+| `bb_width_norm` | BB width / rolling median | Volatility bandwidth |
+| `mom_10_norm` | 10-bar momentum / ATR | Short-horizon directional |
+| `vol_pct_100` | Realized vol (annualized) | Absolute volatility level |
+| `returns_lag1` | `close.pct_change().shift(1)` | Last bar return |
+| `atr_change` | `atr - atr.shift(1)` normalized | Volatility change direction |
+| `trend_score` | ADX × sign(MACD) | Composite trend direction |
 
-- Option B: ML as confidence multiplier (RECOMMENDED)
-  - ML outputs a confidence scalar that multiplies position sizing or signal strength from the existing ensemble. This is robust because it augments the ensemble rather than replacing it. If ML is wrong, ensemble still functions. This approach eases A/B testing and gradual rollout.
+**Architecture**:
 
-- Option C: ML predicts regime → regime-specific weights
-  - ML predicts regimes and a set of weights are applied to ensemble components based on regime probabilities. This is more complex but allows dynamic adaptation of strategy weights.
+```
+Input: 10 features (normalized z-score)
+  ↓
+Dense layer: 24 neurons, ReLU activation, L2 regularization (alpha=0.001)
+  ↓
+Dropout: 0.1 (during training; OFF at inference)
+  ↓
+Dense layer: 12 neurons, ReLU activation, L2 regularization (alpha=0.001)
+  ↓
+Output layer: 3 neurons, Softmax activation
+  → [P(LOW), P(MID), P(HIGH)]
+```
 
-- Option D: ML replaces ensemble entirely
-  - ML outputs discrete trading decisions. Higher potential but higher risk. Requires much stronger validation and continuous monitoring.
+**Training config**:
+- Solver: Adam (adaptive lr)
+- Learning rate: 0.001
+- Max iterations: 500 (early stopping on validation loss)
+- Batch size: 32
+- Regularization: L2 (alpha=0.001) + early stopping on walk-forward validation set
+- Label scheme: ATR percentile LOW/MID/HIGH (same as existing `label_generator.atr_percentile_labels`)
 
-Recommendation: Option B
-  - Rationale: complements the existing ensemble, reduces risk of catastrophic failure, simple to implement using CSV bridge, and allows straightforward backtesting comparisons.
+**Alternative — Logistic Regression (simpler baseline)**:
+If data is limited, start with `LogisticRegression(multi_class='multinomial', C=1.0)` — fewer parameters, more robust on small datasets. Graduate to MLP only if LR underperforms.
 
-5. MQL5 Constraints
+### 2c. Label Generation Strategy
 
-- Memory limits
-  - MQL5 EAs are constrained in memory and code-size. Embedding large model weight matrices is possible but will bloat the EA and could exceed comfortable limits (~1-2MB effective working footprint).
+**Option A — Regime state prediction (recommended for MVP)**:
+- Label = ATR percentile regime at time t (LOW/MID/HIGH)
+- Features = features at time t-1 (closed bar only)
+- Goal: Predict current regime from lagged features
+- Rationale: Matches existing ATR percentile regime detector. ML learns to approximate/improve on it.
 
-- Latency
-  - Do inference only on new bar events (OnNewBar or OnTick with a closed-bar check). Running heavy inference per tick is unnecessary and would increase CPU and latency.
+**Option B — Regime transition prediction**:
+- Label = ATR percentile regime at time t+1
+- Features = features at time t
+- Goal: Anticipate next regime before it happens
+- More useful for trading but harder to predict; higher noise
 
-- File approach best practice
-  - Use Python to write predictions atomically (write to temp file then rename). MQL5 reads the CSV/JSON once per new closed bar. Include timestamp or bar index to ensure alignment and avoid stale reads.
+**Start with Option A**. Transition prediction can be a later enhancement.
 
-- Model retraining
-  - Retrain offline in Python. When retraining is complete, ship new prediction files or new model outputs. If you need to ship new weight arrays into the EA, stop/redeploy the EA to avoid inconsistencies.
+### 2d. MQL5 Integration Detail
 
-6. Industry Practice
+The existing ATR percentile regime detector runs in MQL5 and computes LOW/MID/HIGH directly. The ML perceptron runs externally and outputs a **confidence multiplier**.
 
-- Common model types
-  - Simple linear/logistic models and small neural networks are common in production for robustness and interpretability. Ensemble modeling (averaging multiple small models) is more typical than a single monolithic deep network.
+```
+Signal_strength = existing_ensemble_signal  ×  ML_confidence_multiplier
 
-- Feature sets
-  - Returns at multiple horizons, realized volatility, momentum, volume/tick features, and regime indicators are core features. Feature engineering and clean labeling often matter more than model complexity.
+Where:
+  ML_confidence_multiplier = P(regime_pred)  [e.g., 0.0 to 1.5]
+  Clamped to [0.5, 1.5] to prevent catastrophic signal destruction
+```
 
-- Retrain frequency
-  - Daily or weekly retraining is common, depending on market regime velocity. For high-frequency signals, retrain more often; for daily bar strategies, weekly or monthly retrain may be adequate.
+**File format** (`predictions.csv`):
+```csv
+bar_time,symbol,regime_pred,prob_low,prob_mid,prob_high,confidence,model_version
+2026-04-07 08:00,EURUSD,1,0.10,0.75,0.15,0.85,v1.0
+```
 
-- Institutional approach
-  - Firms like Bridgewater or Two Sigma rely on many diversified models and ensemble weighting rather than a single ML black box. Combining small models with economic/regime-aware logic is standard.
+**MQL5 reading logic (pseudocode)**:
+```mql5
+string latestFile;
+long lastModified = 0;
+string files[];
+FileSelectFolder(...) // not needed — use known path
+// Scan Files/ folder for predictions_*.csv
+// Pick most recent by filename timestamp
+// Read row, check bar_time matches current bar time
+// If match: confidence = (double)row["confidence"];
+// Else: confidence = 1.0 (neutral, ML not available)
+```
 
-Summary Table (concise)
+### 2e. Exporting Normalization Parameters
 
-- MLPBuffer: Complexity Medium | Feasibility Medium | Pros Native, no external | Cons Limited, slow
-- ONNX: Complexity High | Feasibility Low | Pros Powerful | Cons Complex setup, deployment
-- Python CSV: Complexity Low | Feasibility High | Pros Simple, flexible | Cons IPC latency
-- Gate (ML confidence): Complexity Medium | Feasibility High | Pros Robust | Cons Threshold tuning
+The z-score normalization params (mean, std per feature) must be exported from Python and hardcoded or loaded by MQL5 so inference uses the same scaling:
 
-Recommended Implementation Plan
+```json
+// norm_params.json
+{
+  "features": ["atr_pct", "adx_val", "rsi_14", "macd_norm", "bb_width_norm",
+               "mom_10_norm", "vol_pct_100", "returns_lag1", "atr_change", "trend_score"],
+  "mean": [0.5, 20.0, 50.0, 0.0, 0.02, 0.0, 0.15, 0.0, 0.0, 0.0],
+  "std":  [0.25, 10.0, 15.0, 0.0005, 0.01, 0.002, 0.05, 0.01, 0.0001, 0.5]
+}
+```
 
-1. Generate labels from historical backtest data in Python, applying the same trading rules and transaction cost model used in production.
-2. Train a simple sklearn Perceptron or LogisticRegression (or small Keras MLP) on normalized features (z-score). Validate with cross-validation and walk-forward testing.
-3. Export per-bar predictions to CSV (script runs daily or on retrain). Include bar timestamp, symbol, prediction_confidence, predicted_label, and model_version.
-4. MQL5 EA reads the CSV on each new closed bar, verifies model_version/timestamp and applies prediction as a confidence multiplier to the existing ensemble signal.
-5. Phase in: start with ML as an optional toggle behind a configuration parameter. Backtest the EA with and without ML in identical conditions and monitor live performance.
+MQL5 stores these as `const double` arrays at compile time. On each bar, features are computed, normalized, then the softmax is applied using precomputed weights.
 
-Key Risks
+**Alternative (simpler for v1)**: Skip normalization in MQL5 entirely. Have Python output discrete regime_pred (0/1/2) and a confidence score precomputed from the training set accuracy or from calibration. MQL5 just reads the CSV — no normalization math needed inside the EA.
 
-- Overfitting: small datasets and over-parameterized models will not generalize. Prefer simpler models and strong cross-validation (walk-forward) procedures.
-- Look-ahead bias: ensure label generation and feature construction only use closed-bar data and realistic fills/costs.
-- Model staleness: markets change. Retrain cadence and monitoring are essential. Implement monitoring of prediction distribution shifts and P&L attribution.
+---
 
-Appendix: Practical tips
+## 3. Next Steps (Implementation Order)
 
-- Atomic file writes: Python writes predictions to temp file and renames. MQL5 checks for the presence of a new file and reads it once per bar.
-- Timestamp alignment: use bar close UNIX timestamp or ISO8601 to align predictions precisely.
-- Model versioning: include model_version and training_date in CSV so the EA can record which model produced the prediction.
-- Threshold selection: when using ML as gate or multiplier, choose thresholds based on out-of-sample ROC curves and expected P&L improvement, not just accuracy.
+### Step 1 — Data prep + baseline (Python only, no MQL5 yet)
+- [ ] Load historical OHLCV CSV via `data_fetcher.py`
+- [ ] Compute all 10 features
+- [ ] Generate ATR percentile labels
+- [ ] Train `LogisticRegression` baseline (multinomial)
+- [ ] Walk-forward validate: 2-year train → 63-day test → roll forward
+- [ ] Record: accuracy, F1 (weighted), per-class precision/recall, confusion matrix
+- [ ] Threshold analysis: at what confidence does the model outperform the naive baseline (always predict majority class)?
 
-Conclusion
+### Step 2 — MLP if LR underperforms
+- [ ] If LR F1 < 0.5 above baseline: train MLP (24×12 softmax)
+- [ ] Same walk-forward validation
+- [ ] Compare: does MLP beat LR enough to justify complexity?
 
-A pragmatic, low-risk path is to train a simple perceptron/logistic model in Python, export predictions to CSV, and have MQL5 read and apply a confidence multiplier on each new bar (Option B). This offers high feasibility, easy validation, minimal platform complexity, and the ability to iterate quickly while preserving the robustness of the existing ensemble.
+### Step 3 — Export pipeline
+- [ ] Add `predict_regime()` function in `trainer.py` or new `predictor.py`
+- [ ] Export `norm_params.json` and `predictions.csv` with bar_time index
+- [ ] Script: `python predict_regime.py --symbol EURUSD --output Files/predictions.csv`
+- [ ] Document file naming convention and atomic rename pattern
+
+### Step 4 — MQL5 integration
+- [ ] Add `ReadM LPrediction()` function in Greg EA or a shared include
+- [ ] On new bar: scan `Files/predictions_*.csv`, read latest matching symbol+bar
+- [ ] Apply `confidence = clamp(prob_mid if regime_pred==MID else prob_high/low, 0.5, 1.5)`
+- [ ] Add input toggle: `Use_ML_Predictions = true/false`
+- [ ] Print regime + ML confidence to dashboard
+
+### Step 5 — Validation
+- [ ] Backtest Greg EA with ML toggle ON vs OFF (identical conditions)
+- [ ] Walk-forward: retrain model monthly, ship new predictions.csv
+- [ ] Monitor: does ML improve Sharpe / reduce drawdown / improve win rate in specific regimes?
+
+---
+
+## 4. Key Risks
+
+| Risk | Mitigation |
+|------|-----------|
+| Overfitting (small dataset) | Strong L2 regularization, early stopping, walk-forward validation |
+| Look-ahead bias | All features from closed bars only; labels from future ATR percentile computed honestly |
+| Model staleness | Retrain cadence: weekly; log when prediction distribution shifts significantly |
+| File sync issues | Atomic rename (Python writes .tmp → .csv); MQL5 checks timestamp |
+| ML wrong in live market | Confidence multiplier clamped [0.5, 1.5]; EA falls back to ensemble-only if file missing |
+| 3-state classification too noisy | Consider merging to 2-state (LOW/HIGH) first; or using confidence to abstain |
+
+---
+
+## 5. Commit Summary
+
+Perceptron chosen over HMM for supervised alignment with ATR percentile labels, simpler MQL5 integration via CSV bridge, and better small-data robustness. MLP architecture: 10 inputs → Dense(24, ReLU) → Dense(12, ReLU) → Softmax(3). Integration: Option B (confidence multiplier on existing ensemble). Next step: build the Python training + prediction export pipeline, then validate against ATR percentile baseline.
