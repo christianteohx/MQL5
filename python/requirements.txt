@@ -1,0 +1,8 @@
+pandas
+numpy
+hmmlearn
+scikit-learn
+matplotlib
+seaborn
+joblib
+# metaquotes-python  # optional: include if MT5 integration is available
