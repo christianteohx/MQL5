@@ -140,7 +140,7 @@ void LogTrade(string direction, double entry, double sl, double tp, double lots,
    }
    if(fh == INVALID_HANDLE) return;
 
-   if(FileTellPosition(fh) == 0)
+   if(FileTell(fh) == 0)
       FileWriteString(fh, "open_time,direction,entry_price,sl,tp,lots,regime,equity,balance,pnl\n");
 
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
