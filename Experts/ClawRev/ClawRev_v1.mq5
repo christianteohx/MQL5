@@ -116,6 +116,7 @@ bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, string r
    req.sl = sl;
    req.tp = tp;
    req.deviation = 10;
+   req.type_filling = ORDER_FILLING_RETURN;
    req.comment = "ClawRev_v1|" + regime;
 
    bool sent = OrderSend(req, res);
