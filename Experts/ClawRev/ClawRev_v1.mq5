@@ -1,78 +1,76 @@
 //+------------------------------------------------------------------+
-//|                                            ClawRev_v1.mq5         |
-//|                                    Mean-Reversion Expert Advisor |
+//|                                    ClawRev_v1.mq5                |
+//|                                       Mean-Reversion EA           |
 //+------------------------------------------------------------------+
-#property copyright "ClawRev_v1"
+#property copyright "Claw"
 #property version   "1.00"
 #property strict
 
 //+------------------------------------------------------------------+
-//| INPUTS - 7 total parameters                                      |
+//| INPUTS (7 total)                                                 |
 //+------------------------------------------------------------------+
-input int      bb_period       = 20;       // Bollinger Band Period
-input double   bb_deviation    = 2.0;      // Bollinger Band Deviation
-input int      rsi_period      = 14;       // RSI Period
-input int      atr_period       = 14;       // ATR Period for SL/TP sizing
-input double   atr_sl_mult     = 2.0;      // ATR Multiplier for Stop Loss
-input double   atr_tp_mult     = 1.5;      // ATR Multiplier for Take Profit
-input double   risk_percent   = 2.0;      // Risk % of equity per trade
+input int      bb_period      = 20;      // Bollinger Band period
+input double   bb_deviation   = 2.0;     // BB deviation
+input int      rsi_period    = 14;      // RSI period
+input int      atr_period    = 14;       // ATR period
+input double   atr_sl_mult   = 2.0;     // ATR SL multiplier
+input double   atr_tp_mult   = 1.5;     // ATR TP multiplier
+input double   risk_percent  = 2.0;      // Risk % of equity per trade
 
 //+------------------------------------------------------------------+
-//| GLOBAL VARIABLES                                                 |
+//| GLOBAL                                                            |
 //+------------------------------------------------------------------+
-datetime g_lastBarTime = 0;
-
-// Indicator handles
 int g_rsiHandle = INVALID_HANDLE;
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
+datetime gLastBarTime = 0;
 
 //+------------------------------------------------------------------+
-//| ENUM FOR REGIME                                                  |
+//| GetRegime — ATR percentile over 100 bars                          |
 //+------------------------------------------------------------------+
-enum RegimeEnum { REGIME_LOW, REGIME_MID, REGIME_HIGH };
-
-//+------------------------------------------------------------------+
-//| GetRegime - ATR percentile over 100 bars                          |
-//+------------------------------------------------------------------+
-RegimeEnum GetRegime()
+string GetRegime()
 {
    double atrArr[];
-   if(CopyBuffer(g_atrHandle, 0, 0, 100, atrArr) < 100) return REGIME_MID;
+   if(CopyBuffer(g_atrHandle, 0, 0, 100, atrArr) < 100) return "MID";
 
-   // Sort to find percentiles
    double sorted[];
    ArrayResize(sorted, 100);
    ArrayCopy(sorted, atrArr);
    ArraySort(sorted);
 
-   double p33 = sorted[33];  // 33rd percentile
-   double p66 = sorted[66];  // 66th percentile
-   double currentATR = atrArr[0]; // most recent ATR
+   double p33 = sorted[33];
+   double p66 = sorted[66];
+   double current = atrArr[0];
 
-   if(currentATR < p33)       return REGIME_LOW;
-   else if(currentATR > p66)  return REGIME_HIGH;
-   else                        return REGIME_MID;
+   if(current < p33) return "LOW";
+   if(current > p66) return "HIGH";
+   return "MID";
 }
 
 //+------------------------------------------------------------------+
-//| GetAtrMultiplier based on regime                                 |
+//| GetRegimeMultipliers                                             |
 //+------------------------------------------------------------------+
-double GetSLMultiplier(RegimeEnum regime) { return (regime == REGIME_HIGH) ? 3.0 : (regime == REGIME_LOW) ? 1.5 : 2.0; }
-double GetTPMultiplier(RegimeEnum regime) { return (regime == REGIME_HIGH) ? 4.0 : (regime == REGIME_LOW) ? 2.5 : 3.0; }
-
-//+------------------------------------------------------------------+
-//| CalculateRSI - closed bar only [1]                               |
-//+------------------------------------------------------------------+
-double CalculateRSI()
+void GetRegimeMultipliers(string regime, double &slMult, double &tpMult)
 {
-   double rsiArr[];
-   if(CopyBuffer(g_rsiHandle, 0, 1, 1, rsiArr) < 1) return 50.0;
-   return rsiArr[0];
+   if(regime == "LOW")
+   {
+      slMult = atr_sl_mult * 0.6;
+      tpMult = atr_tp_mult * 0.8;
+   }
+   else if(regime == "HIGH")
+   {
+      slMult = atr_sl_mult * 1.4;
+      tpMult = atr_tp_mult * 1.3;
+   }
+   else
+   {
+      slMult = atr_sl_mult;
+      tpMult = atr_tp_mult;
+   }
 }
 
 //+------------------------------------------------------------------+
-//| GetBollingerBands - closed bar only [1]                          |
+//| GetBBValues — closed bar [1]                                    |
 //+------------------------------------------------------------------+
 bool GetBB(double &upper, double &middle, double &lower)
 {
@@ -80,148 +78,123 @@ bool GetBB(double &upper, double &middle, double &lower)
    if(CopyBuffer(g_bbHandle, 1, 1, 1, upperArr) < 1) return false;
    if(CopyBuffer(g_bbHandle, 0, 1, 1, middleArr) < 1) return false;
    if(CopyBuffer(g_bbHandle, 2, 1, 1, lowerArr) < 1) return false;
-   upper   = upperArr[0];
-   middle  = middleArr[0];
-   lower   = lowerArr[0];
+   upper = upperArr[0];
+   middle = middleArr[0];
+   lower = lowerArr[0];
    return (upper != 0.0 && lower != 0.0);
 }
 
 //+------------------------------------------------------------------+
-//| CalculateLotSize                                                 |
+//| CalcLotSize                                                       |
 //+------------------------------------------------------------------+
-double CalculateLotSize(double slDist)
+double CalcLotSize(double slDist)
 {
    if(slDist <= 0) return 0.01;
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double riskAmt = equity * (risk_percent / 100.0);
+   double risk = equity * risk_percent / 100.0;
    double tickVal = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
    double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
    if(tickSize == 0) tickSize = 0.00001;
-   double lot = NormalizeDouble(riskAmt / (slDist * tickVal / tickSize), 2);
+   double lot = risk / (slDist * tickVal / tickSize);
+   lot = NormalizeDouble(lot, 2);
    return MathMax(0.01, MathMin(lot, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));
 }
 
 //+------------------------------------------------------------------+
-//| OpenTrade                                                        |
+//| OpenTrade                                                         |
 //+------------------------------------------------------------------+
-bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, RegimeEnum regime)
+bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, string regime)
 {
-   string dirStr = (type == ORDER_TYPE_BUY) ? "BUY" : "SELL";
-   MqlTradeRequest request = {};
-   MqlTradeResult result = {};
+   MqlTradeRequest req = {};
+   MqlTradeResult res = {};
 
-   request.action       = TRADE_ACTION_DEAL;
-   request.symbol       = _Symbol;
-   request.volume       = lots;
-   request.type         = type;
-   request.price        = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   request.sl           = sl;
-   request.tp           = tp;
-   request.deviation     = 10;
-   request.comment      = "ClawRev_v1";
+   req.action = TRADE_ACTION_DEAL;
+   req.symbol = _Symbol;
+   req.volume = lots;
+   req.type = type;
+   req.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   req.sl = sl;
+   req.tp = tp;
+   req.deviation = 10;
+   req.comment = "ClawRev_v1|" + regime;
 
-   bool sent = OrderSend(request, result);
-   if(sent && result.retcode == TRADE_RETCODE_DONE)
+   bool sent = OrderSend(req, res);
+   if(sent && res.retcode == TRADE_RETCODE_DONE)
    {
-      LogTrade(dirStr, request.price, sl, tp, lots, regime);
+      LogTrade((type == ORDER_TYPE_BUY) ? "BUY" : "SELL", req.price, sl, tp, lots, regime);
    }
    return sent;
 }
 
 //+------------------------------------------------------------------+
-//| LogTrade - CSV format                                            |
+//| LogTrade — CSV                                                   |
 //+------------------------------------------------------------------+
-void LogTrade(string direction, double entry, double sl, double tp, double lots, RegimeEnum regime)
+void LogTrade(string direction, double entry, double sl, double tp, double lots, string regime)
 {
-   string regimeStr = (regime == REGIME_HIGH) ? "HIGH" : (regime == REGIME_MID) ? "MID" : "LOW";
-   string path = "ClawRev_trades.csv";
-   datetime now = TimeCurrent();
-   string openTime = TimeToString(now, TIME_DATE | TIME_MINUTES);
+   string fname = "ClawRev_trades.csv";
+   int fh = FileOpen(fname, FILE_CSV | FILE_READ | FILE_WRITE);
+   if(fh == INVALID_HANDLE)
+   {
+      fh = FileOpen(fname, FILE_CSV | FILE_WRITE);
+   }
+   if(fh == INVALID_HANDLE) return;
+
+   if(FileTellPosition(fh) == 0)
+      FileWriteString(fh, "open_time,direction,entry_price,sl,tp,lots,regime,equity,balance,pnl\n");
 
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    double pnl = equity - balance;
 
-   string header = "open_time,direction,entry_price,sl,tp,lots,regime,equity,balance,pnl";
-   string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.2f,%s,%.2f,%.2f,%.2f",
-                              openTime, direction, entry, sl, tp, lots, regimeStr, equity, balance, pnl);
+   string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.2f,%s,%.2f,%.2f,%.2f\n",
+      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+      direction, entry, sl, tp, lots, regime, equity, balance, pnl);
 
-   bool exists = FileIsExist(path);
-   int fileHandle = FileOpen(path, FILE_CSV | FILE_READ | FILE_WRITE);
-   if(fileHandle != INVALID_HANDLE)
-   {
-      if(!exists) FileWriteString(fileHandle, header + "\n");
-      FileSeek(fileHandle, 0, SEEK_END);
-      FileWriteString(fileHandle, line + "\n");
-      FileClose(fileHandle);
-   }
+   FileSeek(fh, 0, SEEK_END);
+   FileWriteString(fh, line);
+   FileClose(fh);
 }
 
 //+------------------------------------------------------------------+
-//| PrintDashboard                                                   |
+//| PrintDashboard                                                    |
 //+------------------------------------------------------------------+
-void PrintDashboard()
+void PrintDashboard(string regime, double rsiVal, double upper, double middle, double lower)
 {
-   double rsi = CalculateRSI();
-   double upper, middle, lower;
-   GetBB(upper, middle, lower);
-
    double atrArr[];
    CopyBuffer(g_atrHandle, 0, 0, 1, atrArr);
    double atr = (ArraySize(atrArr) > 0) ? atrArr[0] : 0;
 
-   RegimeEnum regime = GetRegime();
-
-   string regimeStr = (regime == REGIME_HIGH) ? "HIGH" : (regime == REGIME_MID) ? "MID" : "LOW";
    string signal = "NEUTRAL";
-
-   // Mean-reversion signals
-   double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   bool bbUpperTouch = (price >= upper * 0.9999);
-   bool bbLowerTouch = (price <= lower * 1.0001);
-   bool rsiOB = (rsi > 70);
-   bool rsiOS = (rsi < 30);
-
-   if(rsiOB && bbUpperTouch) signal = "SELL (overbought + BB upper)";
-   else if(rsiOS && bbLowerTouch) signal = "BUY (oversold + BB lower)";
-
-   double slMult = GetSLMultiplier(regime);
-   double tpMult = GetTPMultiplier(regime);
+   if(rsiVal > 70) signal = "SELL (overbought)";
+   else if(rsiVal < 30) signal = "BUY (oversold)";
 
    Print("=== ClawRev Dashboard ===");
    Print("Symbol: ", _Symbol);
-   Print("RSI: ", rsi, (rsiOB ? " [OVERBOUGHT]" : (rsiOS ? " [OVERSOLD]" : "")));
+   Print("Signal: ", signal, " | Regime: ", regime);
+   Print("RSI: ", rsiVal);
    Print("BB Upper: ", upper, " | Middle: ", middle, " | Lower: ", lower);
-   Print("Price: ", price, " | BB Upper Touch: ", bbUpperTouch, " | BB Lower Touch: ", bbLowerTouch);
    Print("ATR: ", atr);
-   Print("Regime: ", regimeStr, " | SL Mult: ", slMult, " | TP Mult: ", tpMult);
-   Print("Signal: ", signal);
+   Print("Risk: ", risk_percent, "% | SL mult: ", atr_sl_mult, " | TP mult: ", atr_tp_mult);
    Print("Equity: ", AccountInfoDouble(ACCOUNT_EQUITY), " | Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
-   Print("=========================");
+   Print("==========================");
 }
 
 //+------------------------------------------------------------------+
-//| Guardrail checks                                                 |
+//| Guardrails                                                        |
 //+------------------------------------------------------------------+
 bool CheckGuardrails()
 {
-   datetime now = TimeCurrent();
    MqlDateTime dt;
-   TimeToStruct(now, dt);
-
-   // Weekend check
+   TimeToStruct(TimeCurrent(), dt);
    if(dt.day_of_week == 0 || dt.day_of_week == 6) return false;
-
-   // No positions if equity drawdown > 20%
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
    if(balance > 0 && (balance - equity) / balance > 0.20) return false;
-
    return true;
 }
 
 //+------------------------------------------------------------------+
-//| Count open positions                                             |
+//| CountPositions                                                    |
 //+------------------------------------------------------------------+
 int CountPositions()
 {
@@ -234,69 +207,72 @@ int CountPositions()
 }
 
 //+------------------------------------------------------------------+
-//| Expert tick function                                             |
+//| OnTick                                                            |
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(currentBarTime == g_lastBarTime) return;
-   g_lastBarTime = currentBarTime;
+   datetime currentBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(currentBar == gLastBarTime) return;
+   gLastBarTime = currentBar;
 
    if(!CheckGuardrails()) return;
 
-   PrintDashboard();
+   double rsiArr[];
+   if(CopyBuffer(g_rsiHandle, 0, 1, 1, rsiArr) < 1) return;
+   double rsiVal = rsiArr[0];
+
+   double upper, middle, lower;
+   if(!GetBB(upper, middle, lower)) return;
+
+   string regime = GetRegime();
+   double slMult, tpMult;
+   GetRegimeMultipliers(regime, slMult, tpMult);
+
+   PrintDashboard(regime, rsiVal, upper, middle, lower);
 
    if(CountPositions() > 0) return;
 
-   double rsi = CalculateRSI();
-   double upper, middle, lower;
-   GetBB(upper, middle, lower);
-
    double atrArr[];
-   CopyBuffer(g_atrHandle, 0, 0, 1, atrArr);
-   double atr = (ArraySize(atrArr) > 0) ? atrArr[0] : 0;
+   if(CopyBuffer(g_atrHandle, 0, 1, 1, atrArr) < 1) return;
+   double atr = atrArr[0];
 
-   RegimeEnum regime = GetRegime();
+   double slDist = atr * slMult;
+   double tpDist = atr * tpMult;
+   double lots = CalcLotSize(slDist);
 
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
 
-   // Mean reversion entry logic
-   bool rsiOB = (rsi > 70);
-   bool rsiOS = (rsi < 30);
-   bool bbUpperTouch = (price >= upper * 0.9999);
-   bool bbLowerTouch = (price <= lower * 1.0001);
+   // Mean-reversion signals on closed bar
+   bool overbought = (rsiVal > 70);
+   bool oversold = (rsiVal < 30);
+   bool atUpper = (price >= upper * 0.9999);
+   bool atLower = (price <= lower * 1.0001);
 
-   double slMult = GetSLMultiplier(regime);
-   double tpMult = GetTPMultiplier(regime);
-
-   double slDist = atr * atr_sl_mult;
-   double tpDist = atr * atr_tp_mult;
-
-   // SELL: RSI overbought + price at/near BB upper
-   if(rsiOB && bbUpperTouch)
+   // BUY: oversold + BB lower touch
+   if(oversold && atLower)
    {
-      double sl = price + slDist * slMult;
-      double tp = price - tpDist * tpMult;
-      double lots = CalculateLotSize(slDist * slMult);
-      OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
-   }
-   // BUY: RSI oversold + price at/near BB lower
-   else if(rsiOS && bbLowerTouch)
-   {
-      double sl = price - slDist * slMult;
-      double tp = price + tpDist * tpMult;
-      double lots = CalculateLotSize(slDist * slMult);
+      double sl = ask - slDist;
+      double tp = ask + tpDist;
       OpenTrade(ORDER_TYPE_BUY, sl, tp, lots, regime);
+   }
+   // SELL: overbought + BB upper touch
+   else if(overbought && atUpper)
+   {
+      double sl = bid + slDist;
+      double tp = bid - tpDist;
+      OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
    }
 }
 
 //+------------------------------------------------------------------+
-//| Expert initialization                                            |
+//| OnInit                                                            |
 //+------------------------------------------------------------------+
 int OnInit()
 {
    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
-   g_bbHandle  = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
+   g_bbHandle = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
 
    if(g_rsiHandle == INVALID_HANDLE || g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE)
@@ -305,9 +281,9 @@ int OnInit()
       return INIT_FAILED;
    }
 
-   g_lastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   gLastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    Print("ClawRev_v1 initialized - Mean Reversion EA");
-   Print("Parameters: bb_period=", bb_period, ", bb_deviation=", bb_deviation,
+   Print("Params: bb_period=", bb_period, ", bb_deviation=", bb_deviation,
          ", rsi_period=", rsi_period, ", atr_period=", atr_period,
          ", atr_sl_mult=", atr_sl_mult, ", atr_tp_mult=", atr_tp_mult,
          ", risk_percent=", risk_percent);
@@ -315,12 +291,12 @@ int OnInit()
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization                                          |
+//| OnDeinit                                                          |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
    if(g_rsiHandle != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
-   if(g_bbHandle != INVALID_HANDLE)  IndicatorRelease(g_bbHandle);
+   if(g_bbHandle != INVALID_HANDLE) IndicatorRelease(g_bbHandle);
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    Print("ClawRev_v1 deinitialized - Reason: ", reason);
 }

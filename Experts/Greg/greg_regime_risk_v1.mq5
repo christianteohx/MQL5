@@ -194,12 +194,6 @@ int SignalDirection(double &atrOut) {
    // Read closed bars only: [1] current closed, [2] previous closed
    double fast[3], slow[3], rsi[3], adx[3], atr[3];
 
-   ArraySetAsSeries(fast, true);
-   ArraySetAsSeries(slow, true);
-   ArraySetAsSeries(rsi, true);
-   ArraySetAsSeries(adx, true);
-   ArraySetAsSeries(atr, true);
-
    if(CopyBuffer(hFastEMA, 0, 0, 3, fast) < 3) return 0;
    if(CopyBuffer(hSlowEMA, 0, 0, 3, slow) < 3) return 0;
    if(CopyBuffer(hRSI, 0, 0, 3, rsi) < 3) return 0;
@@ -399,7 +393,7 @@ void PrintDashboard() {
       double curPrice = PositionGetDouble(POSITION_PRICE_CURRENT);
       double vol = PositionGetDouble(POSITION_VOLUME);
       long type = PositionGetInteger(POSITION_TYPE);
-      posProfit = PositionGetDouble(PROFIT);
+      posProfit = PositionGetDouble(POSITION_PROFIT);
       string dir = type == POSITION_TYPE_BUY ? "Long" : "Short";
       posStr = StringFormat("%s %.2f lots @ %.5f | P&L: %.2f", dir, vol, openPrice, posProfit);
    }

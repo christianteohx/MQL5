@@ -1,19 +1,11 @@
 //+------------------------------------------------------------------+
-//|                                             ClawTrend_v1.mq5      |
-//|                                                    PM Claw Build  |
+//|                                    ClawTrend_v1.mq5              |
+//|                                          Trend-Following EA      |
 //+------------------------------------------------------------------+
-#property copyright "PM Claw"
+#property copyright "Claw"
 #property version   "1.00"
-#property indicator_chart_output
+#property indicator_chart_window
 #property indicator_buffers 2
-#property indicator_plots   1
-
-//--- plot 1: regime
-#property indicator_label1  "Regime"
-#property indicator_type1   DRAW_LINE
-#property indicator_color1  clrNONE
-#property indicator_style1  STYLE_SOLID
-#property indicator_width1  0
 
 //--- buffers
 double RegimeBuffer[];
@@ -22,92 +14,48 @@ double SignalBuffer[];
 //+------------------------------------------------------------------+
 //| INPUTS (7 total)                                                 |
 //+------------------------------------------------------------------+
-input group "=== EMA ==="
-input int      fast_ema      = 9;      // Fast EMA period
-input int      slow_ema      = 21;     // Slow EMA period
-
-input group "=== RSI ==="
-input int      rsi_period   = 14;     // RSI period
-
-input group "=== ATR Risk ==="
-input int      atr_period   = 14;     // ATR period
-input double   atr_sl_mult  = 1.5;    // ATR SL multiplier
-input double   atr_tp_mult  = 3.0;    // ATR TP multiplier
-
-input group "=== Risk Sizing ==="
-input double   risk_percent = 1.0;    // Risk % of equity per trade
+input int      fast_ema      = 9;       // Fast EMA period
+input int      slow_ema      = 21;      // Slow EMA period
+input int      rsi_period   = 14;      // RSI period
+input int      atr_period   = 14;      // ATR period
+input double   atr_sl_mult  = 1.5;     // ATR SL multiplier
+input double   atr_tp_mult  = 3.0;     // ATR TP multiplier
+input double   risk_percent = 1.0;      // Risk % of equity per trade
 
 //+------------------------------------------------------------------+
 //| GLOBAL                                                            |
 //+------------------------------------------------------------------+
-string  gSymbol;
-double  gTickSize;
-long    gDigits;
-double  gPoint;
+int g_rsiHandle = INVALID_HANDLE;
+int g_emaFastHandle = INVALID_HANDLE;
+int g_emaSlowHandle = INVALID_HANDLE;
+int g_atrHandle = INVALID_HANDLE;
 datetime gLastBarTime = 0;
 datetime gLastTradeTime = 0;
 
 //+------------------------------------------------------------------+
-//| ONINIT                                                            |
+//| GetRegime — ATR percentile over 100 bars                          |
 //+------------------------------------------------------------------+
-int OnInit()
+string GetRegime()
 {
-   gSymbol   = _Symbol;
-   gTickSize = SymbolInfoDouble(gSymbol, SYMBOL_TRADE_TICK_SIZE);
-   gDigits   = (long)SymbolInfoInteger(gSymbol, SYMBOL_DIGITS);
-   gPoint    = SymbolInfoDouble(gSymbol, SYMBOL_POINT);
+   double atrArr[];
+   if(CopyBuffer(g_atrHandle, 0, 0, 100, atrArr) < 100) return "MID";
 
-   IndicatorSetInteger(INDICATOR_SHORTNAME, "ClawTrend_v1");
-
-   SetIndexBuffer(0, RegimeBuffer, INDICATOR_DATA);
-   SetIndexBuffer(1, SignalBuffer, INDICATOR_DATA);
-
-   PlotIndexSetInteger(0, PLOT_DRAW_TYPE, DRAW_LINE);
-   PlotIndexSetInteger(1, PLOT_DRAW_TYPE, DRAW_NONE);
-
-   return INIT_SUCCEEDED;
-}
-
-//+------------------------------------------------------------------+
-//| ONDEINIT                                                          |
-//+------------------------------------------------------------------+
-void OnDeinit(const int reason)
-{
-}
-
-//+------------------------------------------------------------------+
-//| Calc ATR percentile regime over 100 bars                         |
-//+------------------------------------------------------------------+
-string CalcRegime(int shift)
-{
-   double atrVal = iATR(gSymbol, PERIOD_CURRENT, atr_period, shift);
-   if(atrVal <= 0) return "MID";
-
-   // collect 100 bars of ATR
-   double vals[100];
-   for(int i = 0; i < 100; i++)
-   {
-      vals[i] = iATR(gSymbol, PERIOD_CURRENT, atr_period, shift + i);
-      if(vals[i] <= 0) { vals[i] = atrVal; }
-   }
-
-   // percentile buckets
-   double sorted[100];
-   ArrayCopy(sorted, vals);
+   double sorted[];
+   ArrayResize(sorted, 100);
+   ArrayCopy(sorted, atrArr);
    ArraySort(sorted);
 
-   int p33 = 33;
-   int p66 = 66;
-   double threshLow  = sorted[p33];
-   double threshHigh = sorted[p66];
+   double p33 = sorted[33];
+   double p66 = sorted[66];
+   double current = atrArr[0];
 
-   if(atrVal <= threshLow)  return "LOW";
-   if(atrVal >= threshHigh) return "HIGH";
+   if(current < p33) return "LOW";
+   if(current > p66) return "HIGH";
    return "MID";
 }
 
 //+------------------------------------------------------------------+
-//| Get adaptive SL/TP multipliers from regime                       |
+//| GetRegimeMultipliers                                             |
 //+------------------------------------------------------------------+
 void GetRegimeMultipliers(string regime, double &slMult, double &tpMult)
 {
@@ -121,7 +69,7 @@ void GetRegimeMultipliers(string regime, double &slMult, double &tpMult)
       slMult = atr_sl_mult * 1.4;
       tpMult = atr_tp_mult * 1.3;
    }
-   else // MID
+   else
    {
       slMult = atr_sl_mult;
       tpMult = atr_tp_mult;
@@ -129,209 +77,225 @@ void GetRegimeMultipliers(string regime, double &slMult, double &tpMult)
 }
 
 //+------------------------------------------------------------------+
-//| Calc lot size from risk                                          |
+//| CalcLotSize                                                       |
 //+------------------------------------------------------------------+
-double CalcLot(double slDist)
+double CalcLotSize(double slDist)
 {
+   if(slDist <= 0) return 0.01;
    double equity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double risk   = equity * risk_percent / 100.0;
-   double lot    = risk / (slDist > 0 ? slDist / gPoint : 1.0);
-   lot          = MathFloor(lot / SymbolInfoDouble(gSymbol, SYMBOL_VOLUME_STEP)) 
-                  * SymbolInfoDouble(gSymbol, SYMBOL_VOLUME_STEP);
-   return MathMax(lot, SymbolInfoDouble(gSymbol, SYMBOL_VOLUME_MIN));
+   double risk = equity * risk_percent / 100.0;
+   double tickVal = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_VALUE);
+   double tickSize = SymbolInfoDouble(_Symbol, SYMBOL_TRADE_TICK_SIZE);
+   if(tickSize == 0) tickSize = 0.00001;
+   double lot = risk / (slDist * tickVal / tickSize);
+   lot = NormalizeDouble(lot, 2);
+   return MathMax(0.01, MathMin(lot, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));
 }
 
 //+------------------------------------------------------------------+
-//| ONCALC                                                            |
+//| OpenTrade                                                         |
 //+------------------------------------------------------------------+
-int OnCalculate(const int rates_total,
-                const int prev_calculated,
-                const datetime &time[],
-                const double &open[],
-                const double &high[],
-                const double &low[],
-                const double &close[],
-                const long &tick_volume[],
-                const long &volume[],
-                const int &spread[])
+bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, string regime)
 {
-   if(rates_total < MathMax(slow_ema, MathMax(rsi_period, atr_period)) + 100)
-      return 0;
+   MqlTradeRequest req = {};
+   MqlTradeResult res = {};
 
-   int start = prev_calculated > 0 ? prev_calculated - 1 : 1;
+   req.action = TRADE_ACTION_DEAL;
+   req.symbol = _Symbol;
+   req.volume = lots;
+   req.type = type;
+   req.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   req.sl = sl;
+   req.tp = tp;
+   req.deviation = 10;
+   req.comment = "ClawTrend_v1|" + regime;
 
-   for(int i = start; i < rates_total - 1; i++)
+   bool sent = OrderSend(req, res);
+   if(sent && res.retcode == TRADE_RETCODE_DONE)
    {
-      //--- EMA values (closed bar [i+1] not yet formed — use [i] as proxy)
-      double fastEMA = iMA(gSymbol, PERIOD_CURRENT, fast_ema, 0, MODE_EMA, PRICE_CLOSE, i);
-      double slowEMA = iMA(gSymbol, PERIOD_CURRENT, slow_ema, 0, MODE_EMA, PRICE_CLOSE, i);
-
-      //--- Trend
-      bool isLong  = fastEMA > slowEMA;
-      bool isShort = fastEMA < slowEMA;
-
-      //--- RSI on closed bar [1] (anti-repaint)
-      double rsiVal = iRSI(gSymbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE, i + 1);
-      bool rsiBull  = rsiVal > 50;
-      bool rsiBear  = rsiVal < 50;
-
-      //--- Regime
-      string regime = CalcRegime(i + 1);
-
-      //--- Signal: EMA aligned + RSI confirms
-      bool buySignal = isLong  && rsiBull;
-      bool sellSignal = isShort && rsiBear;
-
-      //--- Regime buffer (1=LOW, 2=MID, 3=HIGH for easy viz)
-      if(regime == "LOW")       RegimeBuffer[i] = 1;
-      else if(regime == "MID")  RegimeBuffer[i] = 2;
-      else                      RegimeBuffer[i] = 3;
-
-      SignalBuffer[i] = buySignal ? 1 : (sellSignal ? -1 : 0);
+      LogTrade((type == ORDER_TYPE_BUY) ? "BUY" : "SELL", req.price, sl, tp, lots, regime);
    }
-
-   return rates_total - 1;
+   return sent;
 }
 
 //+------------------------------------------------------------------+
-//| ONTICK                                                            |
+//| LogTrade — CSV                                                   |
 //+------------------------------------------------------------------+
-void OnTick()
+void LogTrade(string direction, double entry, double sl, double tp, double lots, string regime)
 {
-   static datetime lastBar = 0;
-   datetime curBar = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(curBar <= lastBar) return;
-   lastBar = curBar;
-
-   //--- check for new closed bar (index 1 is most recent closed bar)
-   double fastEMA = iMA(gSymbol, PERIOD_CURRENT, fast_ema, 0, MODE_EMA, PRICE_CLOSE, 1);
-   double slowEMA = iMA(gSymbol, PERIOD_CURRENT, slow_ema, 0, MODE_EMA, PRICE_CLOSE, 1);
-
-   bool isLong  = fastEMA > slowEMA;
-   bool isShort = fastEMA < slowEMA;
-
-   double rsiVal = iRSI(gSymbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE, 1);
-   bool rsiBull  = rsiVal > 50;
-   bool rsiBear  = rsiVal < 50;
-
-   string regime = CalcRegime(1);
-
-   bool buySignal  = isLong  && rsiBull;
-   bool sellSignal = isShort && rsiBear;
-
-   //--- Guard: no trades if positions already open
-   if(PositionSelect(gSymbol))
+   string fname = "ClawTrend_trades.csv";
+   int fh = FileOpen(fname, FILE_CSV | FILE_READ | FILE_WRITE);
+   if(fh == INVALID_HANDLE)
    {
-      // existing position — skip
-      return;
+      fh = FileOpen(fname, FILE_CSV | FILE_WRITE);
    }
+   if(fh == INVALID_HANDLE) return;
 
-   if(buySignal || sellSignal)
-   {
-      //--- ATR for SL/TP sizing
-      double atrVal = iATR(gSymbol, PERIOD_CURRENT, atr_period, 1);
-      double slMult, tpMult;
-      GetRegimeMultipliers(regime, slMult, tpMult);
+   if(FileTellPosition(fh) == 0)
+      FileWriteString(fh, "open_time,direction,entry_price,sl,tp,lots,regime,equity,balance,pnl\n");
 
-      double slDist = atrVal * slMult;
-      double tpDist = atrVal * tpMult;
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double balance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double pnl = equity - balance;
 
-      double lot = CalcLot(slDist);
+   string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.2f,%s,%.2f,%.2f,%.2f\n",
+      TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
+      direction, entry, sl, tp, lots, regime, equity, balance, pnl);
 
-      double ask = SymbolInfoDouble(gSymbol, SYMBOL_ASK);
-      double bid = SymbolInfoDouble(gSymbol, SYMBOL_BID);
-      double entryPrice = buySignal ? ask : bid;
-      double sl = buySignal ? (entryPrice - slDist) : (entryPrice + slDist);
-      double tp = buySignal ? (entryPrice + tpDist) : (entryPrice - tpDist);
-
-      double slPips  = MathAbs(entryPrice - sl)  / gPoint;
-      double tpPips  = MathAbs(entryPrice - tp)  / gPoint;
-
-      MqlTradeRequest req = {};
-      MqlTradeResult  res  = {};
-
-      req.action   = TRADE_ACTION_DEAL;
-      req.symbol   = gSymbol;
-      req.volume   = lot;
-      req.type     = buySignal ? ORDER_TYPE_BUY : ORDER_TYPE_SELL;
-      req.price    = entryPrice;
-      req.sl       = sl;
-      req.tp       = tp;
-      req.deviation = 10;
-      req.comment  = "ClawTrend_v1|" + regime;
-
-      OrderSend(req, res);
-
-      if(res.retcode == TRADE_RETCODE_DONE)
-      {
-         LogTrade(buySignal ? "LONG" : "SHORT", entryPrice, sl, tp, lot, regime);
-      }
-
-      PrintDashboard(regime, slPips, tpPips, slDist, tpDist, rsiVal, fastEMA, slowEMA, res.retcode);
-   }
+   FileSeek(fh, 0, SEEK_END);
+   FileWriteString(fh, line);
+   FileClose(fh);
 }
 
 //+------------------------------------------------------------------+
 //| PrintDashboard                                                    |
 //+------------------------------------------------------------------+
-void PrintDashboard(string regime, double slPips, double tpPips,
-                    double slDist, double tpDist,
-                    double rsi, double fEMA, double sEMA, int retcode)
+void PrintDashboard(string regime, double rsiVal, double fastEMA, double slowEMA)
 {
-   string sep = "====================================";
-   Print(sep);
-   Print("  CLAWTREND v1 | ", gSymbol, " | ", TimeToString(TimeCurrent(), TIME_DATE | TIME_MINUTES));
-   Print(sep);
-   PrintFormat("  REGIME   : %s", regime);
-   PrintFormat("  FAST EMA : %.5f", fEMA);
-   PrintFormat("  SLOW EMA : %.5f", sEMA);
-   PrintFormat("  RSI(%.0f) : %.2f", (double)rsi_period, rsi);
-   PrintFormat("  SL dist  : %.5f (%.1f pips)", slDist, slPips);
-   PrintFormat("  TP dist  : %.5f (%.1f pips)", tpDist, tpPips);
-   PrintFormat("  ATR(%.0f) : used for SL/TP", (double)atr_period);
-   PrintFormat("  Equity   : %.2f", AccountInfoDouble(ACCOUNT_EQUITY));
-   PrintFormat("  Balance  : %.2f", AccountInfoDouble(ACCOUNT_BALANCE));
-   PrintFormat("  Trade RC  : %d", retcode);
-   Print(sep);
+   double atrArr[];
+   CopyBuffer(g_atrHandle, 0, 0, 1, atrArr);
+   double atr = (ArraySize(atrArr) > 0) ? atrArr[0] : 0;
+
+   string signal = (fastEMA > slowEMA) ? "LONG" : "SHORT";
+
+   Print("=== ClawTrend Dashboard ===");
+   Print("Symbol: ", _Symbol);
+   Print("Signal: ", signal, " | Regime: ", regime);
+   Print("Fast EMA: ", fastEMA, " | Slow EMA: ", slowEMA);
+   Print("RSI: ", rsiVal);
+   Print("ATR: ", atr);
+   Print("Risk: ", risk_percent, "% | SL mult: ", atr_sl_mult, " | TP mult: ", atr_tp_mult);
+   Print("Equity: ", AccountInfoDouble(ACCOUNT_EQUITY), " | Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
+   Print("===========================");
 }
 
 //+------------------------------------------------------------------+
-//| LogTrade — CSV-friendly                                          |
+//| Guardrails                                                        |
 //+------------------------------------------------------------------+
-void LogTrade(string direction, double entryPrice, double sl, double tp,
-              double lot, string regime)
+bool CheckGuardrails()
 {
-   double equity  = AccountInfoDouble(ACCOUNT_EQUITY);
+   MqlDateTime dt;
+   TimeToStruct(TimeCurrent(), dt);
+   if(dt.day_of_week == 0 || dt.day_of_week == 6) return false;
+   double equity = AccountInfoDouble(ACCOUNT_EQUITY);
    double balance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double pnl     = equity - balance;
+   if(balance > 0 && (balance - equity) / balance > 0.20) return false;
+   return true;
+}
 
-   string fname = "ClawTrend_trades.csv";
-   int fh = FileOpen(fname, FILE_CSV | FILE_READ | FILE_WRITE | FILE_APPEND);
-
-   if(fh == INVALID_HANDLE)
+//+------------------------------------------------------------------+
+//| CountPositions                                                    |
+//+------------------------------------------------------------------+
+int CountPositions()
+{
+   int count = 0;
+   for(int i = PositionsTotal() - 1; i >= 0; i--)
    {
-      // try write-only if file doesn't exist yet
-      fh = FileOpen(fname, FILE_CSV | FILE_WRITE | FILE_APPEND);
+      if(PositionGetSymbol(i) == _Symbol) count++;
+   }
+   return count;
+}
+
+//+------------------------------------------------------------------+
+//| OnTick                                                            |
+//+------------------------------------------------------------------+
+void OnTick()
+{
+   datetime currentBar = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(currentBar == gLastBarTime) return;
+   gLastBarTime = currentBar;
+
+   if(!CheckGuardrails()) return;
+
+   //--- Read closed bar [1] for signals (anti-repaint)
+   double fastEMAArr[], slowEMAArr[];
+   if(CopyBuffer(g_emaFastHandle, 0, 1, 1, fastEMAArr) < 1) return;
+   if(CopyBuffer(g_emaSlowHandle, 0, 1, 1, slowEMAArr) < 1) return;
+   double fastEMA = fastEMAArr[0];
+   double slowEMA = slowEMAArr[0];
+
+   double rsiArr[];
+   if(CopyBuffer(g_rsiHandle, 0, 1, 1, rsiArr) < 1) return;
+   double rsiVal = rsiArr[0];
+
+   string regime = GetRegime();
+   double slMult, tpMult;
+   GetRegimeMultipliers(regime, slMult, tpMult);
+
+   PrintDashboard(regime, rsiVal, fastEMA, slowEMA);
+
+   if(CountPositions() > 0) return;
+
+   bool isLong = (fastEMA > slowEMA);
+   bool isShort = (fastEMA < slowEMA);
+   bool rsiBull = (rsiVal > 50);
+   bool rsiBear = (rsiVal < 50);
+
+   bool buySignal = isLong && rsiBull;
+   bool sellSignal = isShort && rsiBear;
+
+   if(!buySignal && !sellSignal) return;
+
+   double atrArr[];
+   if(CopyBuffer(g_atrHandle, 0, 1, 1, atrArr) < 1) return;
+   double atr = atrArr[0];
+
+   double slDist = atr * slMult;
+   double tpDist = atr * tpMult;
+   double lots = CalcLotSize(slDist);
+
+   double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
+   double bid = SymbolInfoDouble(_Symbol, SYMBOL_BID);
+
+   if(buySignal)
+   {
+      double sl = ask - slDist;
+      double tp = ask + tpDist;
+      OpenTrade(ORDER_TYPE_BUY, sl, tp, lots, regime);
+   }
+   else if(sellSignal)
+   {
+      double sl = bid + slDist;
+      double tp = bid - tpDist;
+      OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
+   }
+}
+
+//+------------------------------------------------------------------+
+//| OnInit                                                            |
+//+------------------------------------------------------------------+
+int OnInit()
+{
+   g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
+   g_emaFastHandle = iMA(_Symbol, PERIOD_CURRENT, fast_ema, 0, MODE_EMA, PRICE_CLOSE);
+   g_emaSlowHandle = iMA(_Symbol, PERIOD_CURRENT, slow_ema, 0, MODE_EMA, PRICE_CLOSE);
+   g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
+
+   if(g_rsiHandle == INVALID_HANDLE || g_emaFastHandle == INVALID_HANDLE ||
+      g_emaSlowHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE)
+   {
+      Print("ClawTrend_v1 ERROR: Failed to create indicator handles!");
+      return INIT_FAILED;
    }
 
-   if(fh != INVALID_HANDLE)
-   {
-      // write header if new file
-      if(FileTellPosition(fh) == 0)
-      {
-         FileWriteString(fh, "open_time,direction,entry_price,sl,tp,lots,regime,equity,balance,pnl\n");
-      }
+   gLastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   Print("ClawTrend_v1 initialized - Trend Following EA");
+   Print("Params: fast_ema=", fast_ema, ", slow_ema=", slow_ema,
+         ", rsi_period=", rsi_period, ", atr_period=", atr_period,
+         ", atr_sl_mult=", atr_sl_mult, ", atr_tp_mult=", atr_tp_mult,
+         ", risk_percent=", risk_percent);
+   return INIT_SUCCEEDED;
+}
 
-      string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.2f,%s,%.2f,%.2f,%.2f\n",
-         TimeToString(TimeCurrent(), TIME_DATE | TIME_SECONDS),
-         direction, entryPrice, sl, tp, lot, regime, equity, balance, pnl);
-
-      FileWriteString(fh, line);
-      FileClose(fh);
-   }
-   else
-   {
-      Print("[ClawTrend] Warning: could not open trade log file");
-   }
+//+------------------------------------------------------------------+
+//| OnDeinit                                                          |
+//+------------------------------------------------------------------+
+void OnDeinit(const int reason)
+{
+   if(g_rsiHandle != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
+   if(g_emaFastHandle != INVALID_HANDLE) IndicatorRelease(g_emaFastHandle);
+   if(g_emaSlowHandle != INVALID_HANDLE) IndicatorRelease(g_emaSlowHandle);
+   if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+   Print("ClawTrend_v1 deinitialized - Reason: ", reason);
 }
 //+------------------------------------------------------------------+
