@@ -9,7 +9,7 @@
 #include <Trade/Trade.mqh>
 
 //+------------------------------------------------------------------+
-//| INPUTS (7 total)                                                 |
+//| INPUTS (10 total)                                                |
 //+------------------------------------------------------------------+
 input int      bb_period      = 20;      // Bollinger Band period
 input double   bb_deviation   = 2.0;    // BB deviation
@@ -18,6 +18,9 @@ input int      atr_period    = 14;      // ATR period
 input double   atr_sl_mult   = 2.0;     // ATR SL multiplier
 input double   atr_tp_mult   = 1.5;     // ATR TP multiplier
 input double   risk_percent  = 2.0;     // Risk % of equity per trade
+input bool     use_ema_filter = true;   // Toggle EMA trend filter on/off
+input int      fast_ema_period = 50;     // Fast EMA period for trend detection
+input int      slow_ema_period = 200;    // Slow EMA period for trend detection
 
 //+------------------------------------------------------------------+
 //| GLOBAL                                                            |
@@ -26,6 +29,8 @@ CTrade trade;
 int g_rsiHandle = INVALID_HANDLE;
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
+int g_fastEmaHandle = INVALID_HANDLE;
+int g_slowEmaHandle = INVALID_HANDLE;
 datetime gLastBarTime = 0;
 
 //+------------------------------------------------------------------+
@@ -88,6 +93,17 @@ bool GetBB(double &upper, double &middle, double &lower)
 }
 
 //+------------------------------------------------------------------+
+//| GetEMATrend — true=bullish (fast > slow), false=bearish          |
+//+------------------------------------------------------------------+
+bool GetEMATrend()
+{
+   double fast[], slow[];
+   if(CopyBuffer(g_fastEmaHandle, 0, 1, 1, fast) < 1) return false;
+   if(CopyBuffer(g_slowEmaHandle, 0, 1, 1, slow) < 1) return false;
+   return (fast[0] > slow[0]);
+}
+
+//+------------------------------------------------------------------+
 //| CalcLotSize                                                       |
 //+------------------------------------------------------------------+
 double CalcLotSize(double slDist)
@@ -145,9 +161,21 @@ void PrintDashboard(string regime, double rsiVal, double upper, double middle, d
    if(rsiVal > 70) signal = "SELL (overbought)";
    else if(rsiVal < 30) signal = "BUY (oversold)";
 
+   string emaTrend = "N/A";
+   if(use_ema_filter)
+   {
+      bool emaBullish = GetEMATrend();
+      emaTrend = emaBullish ? "BULLISH (fast > slow)" : "BEARISH (fast < slow)";
+   }
+   else
+   {
+      emaTrend = "DISABLED";
+   }
+
    Print("=== ClawRev Dashboard ===");
    Print("Symbol: ", _Symbol);
    Print("Signal: ", signal, " | Regime: ", regime);
+   Print("EMA Trend: ", emaTrend, " (", fast_ema_period, "/", slow_ema_period, ")");
    Print("RSI: ", rsiVal);
    Print("BB Upper: ", upper, " | Middle: ", middle, " | Lower: ", lower);
    Print("ATR: ", atr);
@@ -227,16 +255,19 @@ void OnTick()
    bool atUpper = (price >= upper * 0.9999);
    bool atLower = (price <= lower * 1.0001);
 
-   // BUY: oversold + BB lower touch
-   if(oversold && atLower)
+   // EMA trend filter
+   bool emaBullish = (!use_ema_filter) || GetEMATrend();
+
+   // BUY: oversold + BB lower touch + EMA bullish
+   if(oversold && atLower && emaBullish)
    {
       double sl = NormalizeDouble(ask - slDist, _Digits);
       double tp = NormalizeDouble(ask + tpDist, _Digits);
       bool ok = trade.Buy(lots, _Symbol, ask, sl, tp, "ClawRev_v1|" + regime);
       if(ok) LogTrade("BUY", ask, sl, tp, lots, regime);
    }
-   // SELL: overbought + BB upper touch
-   else if(overbought && atUpper)
+   // SELL: overbought + BB upper touch + EMA bearish
+   else if(overbought && atUpper && !emaBullish)
    {
       double sl = NormalizeDouble(bid + slDist, _Digits);
       double tp = NormalizeDouble(bid - tpDist, _Digits);
@@ -257,8 +288,11 @@ int OnInit()
    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
    g_bbHandle = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
+   g_fastEmaHandle = iEMA(_Symbol, PERIOD_CURRENT, fast_ema_period, PRICE_CLOSE);
+   g_slowEmaHandle = iEMA(_Symbol, PERIOD_CURRENT, slow_ema_period, PRICE_CLOSE);
 
-   if(g_rsiHandle == INVALID_HANDLE || g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE)
+   if(g_rsiHandle == INVALID_HANDLE || g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE
+      || g_fastEmaHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE)
    {
       Print("ClawRev_v1 ERROR: Failed to create indicator handles!");
       return INIT_FAILED;
@@ -269,7 +303,10 @@ int OnInit()
    Print("Params: bb_period=", bb_period, ", bb_deviation=", bb_deviation,
          ", rsi_period=", rsi_period, ", atr_period=", atr_period,
          ", atr_sl_mult=", atr_sl_mult, ", atr_tp_mult=", atr_tp_mult,
-         ", risk_percent=", risk_percent);
+         ", risk_percent=", risk_percent,
+         ", use_ema_filter=", use_ema_filter,
+         ", fast_ema_period=", fast_ema_period,
+         ", slow_ema_period=", slow_ema_period);
    return INIT_SUCCEEDED;
 }
 
@@ -281,6 +318,8 @@ void OnDeinit(const int reason)
    if(g_rsiHandle != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
    if(g_bbHandle != INVALID_HANDLE) IndicatorRelease(g_bbHandle);
    if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
+   if(g_fastEmaHandle != INVALID_HANDLE) IndicatorRelease(g_fastEmaHandle);
+   if(g_slowEmaHandle != INVALID_HANDLE) IndicatorRelease(g_slowEmaHandle);
    Print("ClawRev_v1 deinitialized - Reason: ", reason);
 }
 //+------------------------------------------------------------------+
