@@ -11,6 +11,8 @@
 double RegimeBuffer[];
 double SignalBuffer[];
 
+#include <Trade/Trade.mqh>
+
 //+------------------------------------------------------------------+
 //| INPUTS (7 total)                                                 |
 //+------------------------------------------------------------------+
@@ -25,6 +27,7 @@ input double   risk_percent = 1.0;      // Risk % of equity per trade
 //+------------------------------------------------------------------+
 //| GLOBAL                                                            |
 //+------------------------------------------------------------------+
+CTrade trade;
 int g_rsiHandle = INVALID_HANDLE;
 int g_emaFastHandle = INVALID_HANDLE;
 int g_emaSlowHandle = INVALID_HANDLE;
@@ -90,33 +93,6 @@ double CalcLotSize(double slDist)
    double lot = risk / (slDist * tickVal / tickSize);
    lot = NormalizeDouble(lot, 2);
    return MathMax(0.01, MathMin(lot, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));
-}
-
-//+------------------------------------------------------------------+
-//| OpenTrade                                                         |
-//+------------------------------------------------------------------+
-bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, string regime)
-{
-   MqlTradeRequest req = {};
-   MqlTradeResult res = {};
-
-   req.action = TRADE_ACTION_DEAL;
-   req.symbol = _Symbol;
-   req.volume = lots;
-   req.type = type;
-   req.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   req.sl = sl;
-   req.tp = tp;
-   req.deviation = 10;
-   req.type_filling = ORDER_FILLING_FOK;
-   req.comment = "ClawTrend_v1|" + regime;
-
-   bool sent = OrderSend(req, res);
-   if(sent && res.retcode == TRADE_RETCODE_DONE)
-   {
-      LogTrade((type == ORDER_TYPE_BUY) ? "BUY" : "SELL", req.price, sl, tp, lots, regime);
-   }
-   return sent;
 }
 
 //+------------------------------------------------------------------+
@@ -250,15 +226,17 @@ void OnTick()
 
    if(buySignal)
    {
-      double sl = ask - slDist;
-      double tp = ask + tpDist;
-      OpenTrade(ORDER_TYPE_BUY, sl, tp, lots, regime);
+      double sl = NormalizeDouble(ask - slDist, _Digits);
+      double tp = NormalizeDouble(ask + tpDist, _Digits);
+      bool ok = trade.Buy(lots, _Symbol, ask, sl, tp, "ClawTrend_v1|" + regime);
+      if(ok) LogTrade("BUY", ask, sl, tp, lots, regime);
    }
    else if(sellSignal)
    {
-      double sl = bid + slDist;
-      double tp = bid - tpDist;
-      OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
+      double sl = NormalizeDouble(bid + slDist, _Digits);
+      double tp = NormalizeDouble(bid - tpDist, _Digits);
+      bool ok = trade.Sell(lots, _Symbol, bid, sl, tp, "ClawTrend_v1|" + regime);
+      if(ok) LogTrade("SELL", bid, sl, tp, lots, regime);
    }
 }
 
@@ -267,6 +245,10 @@ void OnTick()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   trade.SetExpertMagicNumber(0);
+   trade.SetDeviationInPoints(10);
+   trade.SetTypeFilling(ORDER_FILLING_FOK);
+
    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
    g_emaFastHandle = iMA(_Symbol, PERIOD_CURRENT, fast_ema, 0, MODE_EMA, PRICE_CLOSE);
    g_emaSlowHandle = iMA(_Symbol, PERIOD_CURRENT, slow_ema, 0, MODE_EMA, PRICE_CLOSE);

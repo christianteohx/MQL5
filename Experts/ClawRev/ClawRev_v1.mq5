@@ -6,20 +6,23 @@
 #property version   "1.00"
 #property strict
 
+#include <Trade/Trade.mqh>
+
 //+------------------------------------------------------------------+
 //| INPUTS (7 total)                                                 |
 //+------------------------------------------------------------------+
 input int      bb_period      = 20;      // Bollinger Band period
-input double   bb_deviation   = 2.0;     // BB deviation
+input double   bb_deviation   = 2.0;    // BB deviation
 input int      rsi_period    = 14;      // RSI period
-input int      atr_period    = 14;       // ATR period
+input int      atr_period    = 14;      // ATR period
 input double   atr_sl_mult   = 2.0;     // ATR SL multiplier
 input double   atr_tp_mult   = 1.5;     // ATR TP multiplier
-input double   risk_percent  = 2.0;      // Risk % of equity per trade
+input double   risk_percent  = 2.0;     // Risk % of equity per trade
 
 //+------------------------------------------------------------------+
 //| GLOBAL                                                            |
 //+------------------------------------------------------------------+
+CTrade trade;
 int g_rsiHandle = INVALID_HANDLE;
 int g_bbHandle = INVALID_HANDLE;
 int g_atrHandle = INVALID_HANDLE;
@@ -70,7 +73,7 @@ void GetRegimeMultipliers(string regime, double &slMult, double &tpMult)
 }
 
 //+------------------------------------------------------------------+
-//| GetBBValues — closed bar [1]                                    |
+//| GetBBValues — closed bar [1]                                     |
 //+------------------------------------------------------------------+
 bool GetBB(double &upper, double &middle, double &lower)
 {
@@ -98,34 +101,6 @@ double CalcLotSize(double slDist)
    double lot = risk / (slDist * tickVal / tickSize);
    lot = NormalizeDouble(lot, 2);
    return MathMax(0.01, MathMin(lot, SymbolInfoDouble(_Symbol, SYMBOL_VOLUME_MAX)));
-}
-
-//+------------------------------------------------------------------+
-//| OpenTrade                                                         |
-//+------------------------------------------------------------------+
-bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, string regime)
-{
-   MqlTradeRequest req = {};
-   MqlTradeResult res = {};
-
-   req.action = TRADE_ACTION_DEAL;
-   req.symbol = _Symbol;
-   req.volume = lots;
-   req.type = type;
-   req.price = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   req.sl = sl;
-   req.tp = tp;
-   req.deviation = 10;
-   req.deviation = 10;
-   req.type_filling = ORDER_FILLING_FOK;
-   req.comment = "ClawRev_v1|" + regime;
-
-   bool sent = OrderSend(req, res);
-   if(sent && res.retcode == TRADE_RETCODE_DONE)
-   {
-      LogTrade((type == ORDER_TYPE_BUY) ? "BUY" : "SELL", req.price, sl, tp, lots, regime);
-   }
-   return sent;
 }
 
 //+------------------------------------------------------------------+
@@ -255,16 +230,18 @@ void OnTick()
    // BUY: oversold + BB lower touch
    if(oversold && atLower)
    {
-      double sl = ask - slDist;
-      double tp = ask + tpDist;
-      OpenTrade(ORDER_TYPE_BUY, sl, tp, lots, regime);
+      double sl = NormalizeDouble(ask - slDist, _Digits);
+      double tp = NormalizeDouble(ask + tpDist, _Digits);
+      bool ok = trade.Buy(lots, _Symbol, ask, sl, tp, "ClawRev_v1|" + regime);
+      if(ok) LogTrade("BUY", ask, sl, tp, lots, regime);
    }
    // SELL: overbought + BB upper touch
    else if(overbought && atUpper)
    {
-      double sl = bid + slDist;
-      double tp = bid - tpDist;
-      OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
+      double sl = NormalizeDouble(bid + slDist, _Digits);
+      double tp = NormalizeDouble(bid - tpDist, _Digits);
+      bool ok = trade.Sell(lots, _Symbol, bid, sl, tp, "ClawRev_v1|" + regime);
+      if(ok) LogTrade("SELL", bid, sl, tp, lots, regime);
    }
 }
 
@@ -273,6 +250,10 @@ void OnTick()
 //+------------------------------------------------------------------+
 int OnInit()
 {
+   trade.SetExpertMagicNumber(0);
+   trade.SetDeviationInPoints(10);
+   trade.SetTypeFilling(ORDER_FILLING_FOK);
+
    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
    g_bbHandle = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
