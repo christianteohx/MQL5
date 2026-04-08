@@ -325,6 +325,7 @@ void OnDeinit(const int reason)
 
 //+------------------------------------------------------------------+
 //+------------------------------------------------------------------+
+//+------------------------------------------------------------------+
 //| OnTester - Top-5 Results Management                              |
 //+------------------------------------------------------------------+
 double OnTester()
@@ -365,42 +366,26 @@ double OnTester()
       FileClose(handle);
    }
 
-   //--- Top-5 purge using FileFindFirst/Next loop
-   string csvFiles[];
-   ArrayResize(csvFiles, 0);
-
-   long searchHandle = FileFindFirst("ClawRev_*.csv", csvFiles);
-   if(searchHandle != INVALID_HANDLE && ArraySize(csvFiles) > 0)
+   //--- Simple purge: delete worse CSVs using FileFindFirst (single filename at a time)
+   string foundFile;
+   long searchHandle = FileFindFirst("ClawRev_*.csv", foundFile);
+   if(searchHandle != INVALID_HANDLE)
    {
-      // Collect all matching files
-      string allFiles[];
-      ArrayResize(allFiles, 0);
-      ArrayResize(allFiles, ArraySize(csvFiles));
-      allFiles[0] = csvFiles[0];
-      int count = 1;
-
-      while(FileFindNext(searchHandle, csvFiles))
+      do
       {
-         ArrayResize(allFiles, count + 1);
-         allFiles[count] = csvFiles[0];
-         count++;
-      }
-      FileFindClose(searchHandle);
+         // Extract result from: ClawRev_PASS_RESULT.csv
+         int secondDash = StringFind(foundFile, "_", StringFind(foundFile, "_") + 1);
+         int csvPos = StringFind(foundFile, ".csv");
+         string resultPart = StringSubstr(foundFile, secondDash + 1, csvPos - secondDash - 1);
+         double fResult = StringToDouble(resultPart);
 
-      // Delete files worse than current result
-      for(int i = 0; i < ArraySize(allFiles); i++)
-      {
-         string fn = allFiles[i];
-         int lastUs = StringFind(fn, "_", StringFind(fn, "_") + 1);
-         int lastDot = StringFind(fn, ".csv");
-         string resultStr = StringSubstr(fn, lastUs + 1, lastDot - lastUs - 1);
-         double fileResult = StringToDouble(resultStr);
-
-         if(fileResult < result && fileResult > 0)
+         // Delete if worse than current result
+         if(fResult > 0 && fResult < result && foundFile != fname)
          {
-            FileDelete(fn);
+            FileDelete(foundFile);
          }
-      }
+      } while(FileFindNext(searchHandle, foundFile));
+      FileFindClose(searchHandle);
    }
 
    return result;
