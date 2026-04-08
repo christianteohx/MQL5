@@ -324,112 +324,70 @@ void OnDeinit(const int reason)
 }
 
 //+------------------------------------------------------------------+
-//| OnTester - Top-5 Results Management                              |
-//| Runs after each optimization pass completes                        |
 //+------------------------------------------------------------------+
-void OnTester()
+//| OnTester - Top-5 Results Management                              |
+//+------------------------------------------------------------------+
+double OnTester()
 {
-   if(!MQLInfoInteger(MQL_OPTIMIZATION)) return;
+   if(!MQLInfoInteger(MQL_OPTIMIZATION)) return 0.0;
 
-   double result = Tester.Result(TRADE);
-   int pass = (int)Tester.GetPassedCount();
-   string filename = "ClawRev_" + IntegerToString(pass) + "_" + DoubleToString(result, 2) + ".csv";
+   double result = AccountInfoDouble(ACCOUNT_EQUITY);
+   static int passCount = 0;
+   passCount++;
 
-   // --- Step 1: Write the trade log ---
-   int handle = FileOpen(filename, FILE_WRITE|FILE_ANSI|FILE_SHARE_READ);
-   if(handle == INVALID_HANDLE) return;
+   string fname = StringFormat("ClawRev_%d_%.2f.csv", passCount, result);
 
-   FileWriteString(handle, "datetime,action,open,close,low,atr_sl,regime,equity,balance,pnl\n");
-
-   // Collect deals from History API for this symbol
-   ulong dealTicket = HistoryDealGetTicket(0);
-   double finalEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   double finalBalance = AccountInfoDouble(ACCOUNT_BALANCE);
-   double totalPnl = 0.0;
-
-   for(int i = 0; i < HistoryDealsTotal(); i++)
+   int handle = FileOpen(fname, FILE_CSV | FILE_WRITE);
+   if(handle != INVALID_HANDLE)
    {
-      ulong ticket = HistoryDealGetTicket(i);
-      if(ticket == 0) continue;
+      FileWrite(handle, "datetime,action,open,close,volume,price,profit,equity");
 
-      string dealSymbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
-      if(dealSymbol != _Symbol) continue;
+      int total = HistoryDealsTotal();
+      for(int i = 0; i < total; i++)
+      {
+         ulong ticket = HistoryDealGetTicket(i);
+         if(ticket == 0) continue;
 
-      datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
-      long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
-      double dealProfit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
-      double dealVolume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
-      double dealPrice = HistoryDealGetDouble(ticket, DEAL_PRICE);
-      double dealSL = HistoryDealGetDouble(ticket, DEAL_SL);
-      double dealTP = HistoryDealGetDouble(ticket, DEAL_TP);
+         string symbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
+         if(symbol != _Symbol) continue;
 
-      string action = (dealType == DEAL_TYPE_BUY) ? "BUY" : "SELL";
-      double openPrice = dealPrice;
-      double closePrice = (dealType == DEAL_TYPE_BUY) ? dealSL : dealTP;
-      if(closePrice == 0) closePrice = dealPrice;
-      double atrSL = (dealType == DEAL_TYPE_BUY) ? dealSL : dealTP;
-      string regime = "MID"; // regime info not stored in deal, use default
+         long type = HistoryDealGetInteger(ticket, DEAL_TYPE);
+         double profit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+         double price = HistoryDealGetDouble(ticket, DEAL_PRICE);
+         double volume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
+         datetime time = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
 
-      totalPnl += dealProfit;
+         string action = (type == DEAL_TYPE_BUY) ? "BUY" : "SELL";
 
-      string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.5f,%s,%.2f,%.2f,%.2f\n",
-         TimeToString(dealTime, TIME_DATE | TIME_SECONDS),
-         action, openPrice, closePrice, 0.0, atrSL, regime,
-         finalEquity, finalBalance, totalPnl);
-      FileWriteString(handle, line);
+         FileWrite(handle, StringFormat("%d,%s,%.5f,%.5f,%.2f,%.2f,%.2f",
+            time, action, price, 0.0, volume, profit, AccountInfoDouble(ACCOUNT_EQUITY)));
+      }
+      FileClose(handle);
    }
 
-   FileClose(handle);
-
-   // --- Step 2: Collect all ClawRev CSV files ---
+   //--- Top-5 purge
    string files[];
-   long search = FileFindFirst("ClawRev_*.csv", files);
-   if(search == INVALID_HANDLE) return;
+   ArrayResize(files, 0);
 
-   int count = 0;
-   do
+   long searchHandle = FileFindFirst("ClawRev_*.csv", files);
+   if(searchHandle != INVALID_HANDLE)
    {
-      ArrayResize(files, count + 1);
-      files[count] = files[0];
-      count++;
-   }
-   while(FileFindNext(search));
-   FileFindClose(search);
-
-   // --- Step 3: If more than 5 files, purge the lowest ---
-   if(count > 5)
-   {
-      // Bubble sort descending by result (parse from filename)
-      for(int i = 0; i < count - 1; i++)
+      do
       {
-         for(int j = i + 1; j < count; j++)
+         string fn = files[0];
+         int lastUs = StringFind(fn, "_", StringFind(fn, "_") + 1);
+         int lastDot = StringFind(fn, ".csv");
+         string resultStr = StringSubstr(fn, lastUs + 1, lastDot - lastUs - 1);
+         double fileResult = StringToDouble(resultStr);
+
+         if(fileResult < result && fileResult > 0)
          {
-            string f1 = files[i];
-            string f2 = files[j];
-
-            string parts1[], parts2[];
-            StringSplit(f1, '_', parts1);
-            StringSplit(f2, '_', parts2);
-            StringReplace(parts1[ArraySize(parts1)-1], ".csv", "");
-            StringReplace(parts2[ArraySize(parts2)-1], ".csv", "");
-            double r1 = StringToDouble(parts1[ArraySize(parts1)-1]);
-            double r2 = StringToDouble(parts2[ArraySize(parts2)-1]);
-
-            if(r2 > r1)
-            {
-               string temp = files[i];
-               files[i] = files[j];
-               files[j] = temp;
-            }
+            FileDelete(fn);
          }
-      }
-
-      // Delete files beyond index 4 (keep top 5)
-      for(int i = 5; i < count; i++)
-      {
-         FileDelete(files[i]);
-      }
+      } while(FileFindNext(searchHandle, files));
+      FileFindClose(searchHandle);
    }
-}
 
+   return result;
+}
 //+------------------------------------------------------------------+
