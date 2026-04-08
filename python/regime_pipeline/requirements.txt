@@ -1,8 +1,4 @@
-pandas
-numpy
-hmmlearn
-scikit-learn
-matplotlib
-seaborn
-joblib
-# metaquotes-python  # optional: include if MT5 integration is available
+# Requirements — MQL5 Python regime pipeline
+numpy>=1.24.0
+pandas>=2.0.0
+scikit-learn>=1.3.0

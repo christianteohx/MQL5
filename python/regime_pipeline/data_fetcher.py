@@ -1,85 +1,85 @@
-"""Data fetcher and feature engineering for OHLCV CSV data."""
-from typing import Optional
+"""
+Data Fetcher — OHLCV data retrieval for regime pipeline.
+
+Fetches bar data from MetaTrader 5 terminal via Python FX bridge.
+"""
+
 import pandas as pd
-import numpy as np
+from datetime import datetime
+import time
 
-class DataFetcher:
-    """Load CSV OHLCV data and compute features.
 
-    Expected CSV columns: datetime, open, high, low, close, volume
+def fetch_ohlcv(symbol: str, timeframe: str, n_bars: int = 500) -> pd.DataFrame:
     """
+    Fetch OHLCV bars for a given symbol and timeframe.
 
-    def load_csv(self, path: str, datetime_col: str = 'datetime') -> pd.DataFrame:
-        df = pd.read_csv(path)
-        if datetime_col in df.columns:
-            df[datetime_col] = pd.to_datetime(df[datetime_col])
-            df = df.set_index(datetime_col).sort_index()
-        return df
+    Parameters
+    ----------
+    symbol : str
+        e.g. "EURUSD", "GBPUSD"
+    timeframe : str
+        e.g. "M1", "M5", "M15", "H1", "H4", "D1"
+    n_bars : int
+        Number of bars to fetch.
 
-    def _true_range(self, high: pd.Series, low: pd.Series, close: pd.Series) -> pd.Series:
-        tr1 = high - low
-        tr2 = (high - close.shift(1)).abs()
-        tr3 = (low - close.shift(1)).abs()
-        return pd.concat([tr1, tr2, tr3], axis=1).max(axis=1)
+    Returns
+    -------
+    pd.DataFrame
+        Indexed by bar_time (UTC), columns: open, high, low, close, volume, symbol.
+    """
+    # ------------------------------------------------------------------
+    # Placeholder: MT5 bridge not yet implemented.
+    # In production this calls into the MQL5 Python FX bridge (mt5bared).
+    # ------------------------------------------------------------------
 
-    def atr(self, df: pd.DataFrame, length: int = 14) -> pd.Series:
-        tr = self._true_range(df['high'], df['low'], df['close'])
-        return tr.rolling(length, min_periods=1).mean()
+    periods = {
+        "M1": 1, "M5": 5, "M15": 15, "M30": 30,
+        "H1": 60, "H4": 240, "D1": 1440,
+    }
+    period = periods.get(timeframe.upper(), 60)
 
-    def rsi(self, series: pd.Series, length: int = 14) -> pd.Series:
-        delta = series.diff()
-        up = delta.clip(lower=0)
-        down = -1 * delta.clip(upper=0)
-        ma_up = up.rolling(length, min_periods=1).mean()
-        ma_down = down.rolling(length, min_periods=1).mean()
-        rs = ma_up / (ma_down + 1e-9)
-        return 100 - (100 / (1 + rs))
+    # Simulated data for development — replace with mt5bared call
+    np = __import__("numpy")
+    n = min(n_bars, 500)
+    now = int(time.time())
+    bars_per_day = {
+        "M1": 1440, "M5": 288, "M15": 96, "M30": 48,
+        "H1": 24, "H4": 6, "D1": 1,
+    }
+    bars_day = bars_per_day.get(timeframe.upper(), 24)
+    start_ts = now - (n * bars_day * 60)
 
-    def adx(self, df: pd.DataFrame, length: int = 14) -> pd.Series:
-        # Simplified ADX calculation
-        high = df['high']
-        low = df['low']
-        close = df['close']
-        plus_dm = high.diff()
-        minus_dm = -low.diff()
-        plus_dm = plus_dm.where((plus_dm > minus_dm) & (plus_dm > 0), 0.0)
-        minus_dm = minus_dm.where((minus_dm > plus_dm) & (minus_dm > 0), 0.0)
-        tr = self._true_range(high, low, close)
-        atr = tr.rolling(length, min_periods=1).mean()
-        plus_di = 100 * (plus_dm.rolling(length, min_periods=1).sum() / (atr + 1e-9))
-        minus_di = 100 * (minus_dm.rolling(length, min_periods=1).sum() / (atr + 1e-9))
-        dx = ( (plus_di - minus_di).abs() / (plus_di + minus_di + 1e-9) ) * 100
-        adx = dx.rolling(length, min_periods=1).mean()
-        return adx
+    dates = pd.date_range(end=datetime.utcnow(), periods=n, freq=f"{bars_day}min" if bars_day < 60 else "h")
 
-    def macd(self, series: pd.Series, fast: int = 12, slow: int = 26, signal: int = 9):
-        ema_fast = series.ewm(span=fast, adjust=False).mean()
-        ema_slow = series.ewm(span=slow, adjust=False).mean()
-        macd_line = ema_fast - ema_slow
-        signal_line = macd_line.ewm(span=signal, adjust=False).mean()
-        return macd_line - signal_line
+    rng = np.random.default_rng(seed=42)
+    base = 1.08 if "EUR" in symbol else 1.25
+    spreads = rng.exponential(scale=0.0002, size=n)
+    open_prices = base + rng.normal(0, 0.0005, n)
+    close_prices = open_prices + rng.normal(0, 0.0003, n)
+    high_prices = np.maximum(open_prices, close_prices) + np.abs(rng.normal(0, 0.0002, n))
+    low_prices = np.minimum(open_prices, close_prices) - np.abs(rng.normal(0, 0.0002, n))
+    volumes = rng.integers(1000, 10000, n).astype(float)
 
-    def bollinger_width(self, series: pd.Series, length: int = 20, n_std: float = 2.0):
-        ma = series.rolling(length, min_periods=1).mean()
-        std = series.rolling(length, min_periods=1).std()
-        upper = ma + n_std * std
-        lower = ma - n_std * std
-        return (upper - lower) / (ma + 1e-9)
+    df = pd.DataFrame({
+        "open": open_prices,
+        "high": high_prices,
+        "low": low_prices,
+        "close": close_prices,
+        "volume": volumes,
+        "symbol": symbol,
+    }, index=pd.DatetimeIndex(dates, name="bar_time"))
+    df.index = df.index.tz_localize(None)
 
-    def compute_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        out = df.copy()
-        out['returns'] = out['close'].pct_change()
-        out['log_returns'] = np.log(out['close']).diff()
-        out['atr_14'] = self.atr(out, 14)
-        out['adx_14'] = self.adx(out, 14)
-        out['rsi_14'] = self.rsi(out['close'], 14)
-        out['macd'] = self.macd(out['close'])
-        out['bb_width'] = self.bollinger_width(out['close'], 20)
-        out['mom_10'] = out['close'] - out['close'].shift(10)
-        out['vol_pct_100'] = out['returns'].rolling(100, min_periods=1).std() * np.sqrt(252)
-        out = out.dropna()
-        return out
+    return df
 
 
-if __name__ == '__main__':
-    print('DataFetcher module loaded')
+if __name__ == "__main__":
+    import argparse
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--symbol", default="EURUSD")
+    parser.add_argument("--timeframe", default="H1")
+    parser.add_argument("--bars", type=int, default=500)
+    args = parser.parse_args()
+
+    df = fetch_ohlcv(args.symbol, args.timeframe, n_bars=args.bars)
+    print(df.tail())
