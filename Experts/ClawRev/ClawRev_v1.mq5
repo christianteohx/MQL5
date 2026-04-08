@@ -237,12 +237,13 @@ void OnTick()
 
    if(CountPositions() > 0) return;
 
+   // Capture ATR from closed bar [1] once — lock SL/TL distances here, do not recalculate
    double atrArr[];
    if(CopyBuffer(g_atrHandle, 0, 1, 1, atrArr) < 1) return;
-   double atr = atrArr[0];
+   double atrAtEntry = atrArr[0];
 
-   double slDist = atr * slMult;
-   double tpDist = atr * tpMult;
+   double slDist = atrAtEntry * slMult;
+   double tpDist = atrAtEntry * tpMult;
    double lots = CalcLotSize(slDist);
 
    double ask = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
@@ -261,6 +262,7 @@ void OnTick()
    // BUY: oversold + BB lower touch + EMA bullish
    if(oversold && atLower && emaBullish)
    {
+      // SL/TP locked from atrAtEntry — entry price is ask
       double sl = NormalizeDouble(ask - slDist, _Digits);
       double tp = NormalizeDouble(ask + tpDist, _Digits);
       bool ok = trade.Buy(lots, _Symbol, ask, sl, tp, "ClawRev_v1|" + regime);
@@ -269,6 +271,7 @@ void OnTick()
    // SELL: overbought + BB upper touch + EMA bearish
    else if(overbought && atUpper && !emaBullish)
    {
+      // SL/TP locked from atrAtEntry — entry price is bid
       double sl = NormalizeDouble(bid + slDist, _Digits);
       double tp = NormalizeDouble(bid - tpDist, _Digits);
       bool ok = trade.Sell(lots, _Symbol, bid, sl, tp, "ClawRev_v1|" + regime);
