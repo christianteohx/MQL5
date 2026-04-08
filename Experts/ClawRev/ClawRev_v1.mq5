@@ -322,4 +322,114 @@ void OnDeinit(const int reason)
    if(g_slowEmaHandle != INVALID_HANDLE) IndicatorRelease(g_slowEmaHandle);
    Print("ClawRev_v1 deinitialized - Reason: ", reason);
 }
+
+//+------------------------------------------------------------------+
+//| OnTester - Top-5 Results Management                              |
+//| Runs after each optimization pass completes                        |
+//+------------------------------------------------------------------+
+void OnTester()
+{
+   if(!MQLInfoInteger(MQL_OPTIMIZATION)) return;
+
+   double result = Tester.Result(TRADE);
+   int pass = (int)Tester.GetPassedCount();
+   string filename = "ClawRev_" + IntegerToString(pass) + "_" + DoubleToString(result, 2) + ".csv";
+
+   // --- Step 1: Write the trade log ---
+   int handle = FileOpen(filename, FILE_WRITE|FILE_ANSI|FILE_SHARE_READ);
+   if(handle == INVALID_HANDLE) return;
+
+   FileWriteString(handle, "datetime,action,open,close,low,atr_sl,regime,equity,balance,pnl\n");
+
+   // Collect deals from History API for this symbol
+   ulong dealTicket = HistoryDealGetTicket(0);
+   double finalEquity = AccountInfoDouble(ACCOUNT_EQUITY);
+   double finalBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   double totalPnl = 0.0;
+
+   for(int i = 0; i < HistoryDealsTotal(); i++)
+   {
+      ulong ticket = HistoryDealGetTicket(i);
+      if(ticket == 0) continue;
+
+      string dealSymbol = HistoryDealGetString(ticket, DEAL_SYMBOL);
+      if(dealSymbol != _Symbol) continue;
+
+      datetime dealTime = (datetime)HistoryDealGetInteger(ticket, DEAL_TIME);
+      long dealType = HistoryDealGetInteger(ticket, DEAL_TYPE);
+      double dealProfit = HistoryDealGetDouble(ticket, DEAL_PROFIT);
+      double dealVolume = HistoryDealGetDouble(ticket, DEAL_VOLUME);
+      double dealPrice = HistoryDealGetDouble(ticket, DEAL_PRICE);
+      double dealSL = HistoryDealGetDouble(ticket, DEAL_SL);
+      double dealTP = HistoryDealGetDouble(ticket, DEAL_TP);
+
+      string action = (dealType == DEAL_TYPE_BUY) ? "BUY" : "SELL";
+      double openPrice = dealPrice;
+      double closePrice = (dealType == DEAL_TYPE_BUY) ? dealSL : dealTP;
+      if(closePrice == 0) closePrice = dealPrice;
+      double atrSL = (dealType == DEAL_TYPE_BUY) ? dealSL : dealTP;
+      string regime = "MID"; // regime info not stored in deal, use default
+
+      totalPnl += dealProfit;
+
+      string line = StringFormat("%s,%s,%.5f,%.5f,%.5f,%.5f,%s,%.2f,%.2f,%.2f\n",
+         TimeToString(dealTime, TIME_DATE | TIME_SECONDS),
+         action, openPrice, closePrice, 0.0, atrSL, regime,
+         finalEquity, finalBalance, totalPnl);
+      FileWriteString(handle, line);
+   }
+
+   FileClose(handle);
+
+   // --- Step 2: Collect all ClawRev CSV files ---
+   string files[];
+   long search = FileFindFirst("ClawRev_*.csv", files);
+   if(search == INVALID_HANDLE) return;
+
+   int count = 0;
+   do
+   {
+      ArrayResize(files, count + 1);
+      files[count] = files[0];
+      count++;
+   }
+   while(FileFindNext(search));
+   FileFindClose(search);
+
+   // --- Step 3: If more than 5 files, purge the lowest ---
+   if(count > 5)
+   {
+      // Bubble sort descending by result (parse from filename)
+      for(int i = 0; i < count - 1; i++)
+      {
+         for(int j = i + 1; j < count; j++)
+         {
+            string f1 = files[i];
+            string f2 = files[j];
+
+            string parts1[], parts2[];
+            StringSplit(f1, '_', parts1);
+            StringSplit(f2, '_', parts2);
+            StringReplace(parts1[ArraySize(parts1)-1], ".csv", "");
+            StringReplace(parts2[ArraySize(parts2)-1], ".csv", "");
+            double r1 = StringToDouble(parts1[ArraySize(parts1)-1]);
+            double r2 = StringToDouble(parts2[ArraySize(parts2)-1]);
+
+            if(r2 > r1)
+            {
+               string temp = files[i];
+               files[i] = files[j];
+               files[j] = temp;
+            }
+         }
+      }
+
+      // Delete files beyond index 4 (keep top 5)
+      for(int i = 5; i < count; i++)
+      {
+         FileDelete(files[i]);
+      }
+   }
+}
+
 //+------------------------------------------------------------------+
