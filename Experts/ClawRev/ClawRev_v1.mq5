@@ -288,8 +288,8 @@ int OnInit()
    g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
    g_bbHandle = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
    g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
-   g_fastEmaHandle = iEMA(_Symbol, PERIOD_CURRENT, fast_ema_period, PRICE_CLOSE);
-   g_slowEmaHandle = iEMA(_Symbol, PERIOD_CURRENT, slow_ema_period, PRICE_CLOSE);
+   g_fastEmaHandle = iMA(_Symbol, PERIOD_CURRENT, fast_ema_period, 0, MODE_EMA, PRICE_CLOSE);
+   g_slowEmaHandle = iMA(_Symbol, PERIOD_CURRENT, slow_ema_period, 0, MODE_EMA, PRICE_CLOSE);
 
    if(g_rsiHandle == INVALID_HANDLE || g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE
       || g_fastEmaHandle == INVALID_HANDLE || g_slowEmaHandle == INVALID_HANDLE)
