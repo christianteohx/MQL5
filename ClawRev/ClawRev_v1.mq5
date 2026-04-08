@@ -12,7 +12,7 @@
 input int      bb_period       = 20;       // Bollinger Band Period
 input double   bb_deviation    = 2.0;      // Bollinger Band Deviation
 input int      rsi_period      = 14;       // RSI Period
-input int      atr_period      = 14;       // ATR Period for SL/TP sizing
+input int      atr_period       = 14;       // ATR Period for SL/TP sizing
 input double   atr_sl_mult     = 2.0;      // ATR Multiplier for Stop Loss
 input double   atr_tp_mult     = 1.5;      // ATR Multiplier for Take Profit
 input double   risk_percent   = 2.0;      // Risk % of equity per trade
@@ -20,10 +20,12 @@ input double   risk_percent   = 2.0;      // Risk % of equity per trade
 //+------------------------------------------------------------------+
 //| GLOBAL VARIABLES                                                 |
 //+------------------------------------------------------------------+
-datetime lastBarTime   = 0;
-double   lastEquity    = 0;
-double   lastBalance   = 0;
-double   lastPnL       = 0;
+datetime g_lastBarTime = 0;
+
+// Indicator handles
+int g_rsiHandle = INVALID_HANDLE;
+int g_bbHandle = INVALID_HANDLE;
+int g_atrHandle = INVALID_HANDLE;
 
 //+------------------------------------------------------------------+
 //| ENUM FOR REGIME                                                  |
@@ -31,12 +33,12 @@ double   lastPnL       = 0;
 enum RegimeEnum { REGIME_LOW, REGIME_MID, REGIME_HIGH };
 
 //+------------------------------------------------------------------+
-//| GetRegime - ATR percentile over 100 bars                         |
+//| GetRegime - ATR percentile over 100 bars                          |
 //+------------------------------------------------------------------+
-RegimeEnum GetRegime(int atrPeriod)
+RegimeEnum GetRegime()
 {
    double atrArr[];
-   if(CopyATR(_Symbol, PERIOD_CURRENT, 1, 100, atrArr) < 100) return REGIME_MID;
+   if(CopyBuffer(g_atrHandle, 0, 0, 100, atrArr) < 100) return REGIME_MID;
 
    // Sort to find percentiles
    double sorted[];
@@ -48,40 +50,44 @@ RegimeEnum GetRegime(int atrPeriod)
    double p66 = sorted[66];  // 66th percentile
    double currentATR = atrArr[0]; // most recent ATR
 
-   if(currentATR < p33)      return REGIME_LOW;
+   if(currentATR < p33)       return REGIME_LOW;
    else if(currentATR > p66)  return REGIME_HIGH;
-   else                       return REGIME_MID;
+   else                        return REGIME_MID;
 }
 
 //+------------------------------------------------------------------+
 //| GetAtrMultiplier based on regime                                 |
 //+------------------------------------------------------------------+
 double GetSLMultiplier(RegimeEnum regime) { return (regime == REGIME_HIGH) ? 3.0 : (regime == REGIME_LOW) ? 1.5 : 2.0; }
-double GetTPMultiplier(RegimeEnum regime) { return (regime == REGIME_HIGH) ? 1.0 : (regime == REGIME_LOW) ? 2.0 : 1.5; }
+double GetTPMultiplier(RegimeEnum regime) { return (regime == REGIME_HIGH) ? 4.0 : (regime == REGIME_LOW) ? 2.5 : 3.0; }
 
 //+------------------------------------------------------------------+
-//| CalculateRSI - closed bar only [1]                                |
+//| CalculateRSI - closed bar only [1]                               |
 //+------------------------------------------------------------------+
-double CalculateRSI(int period)
+double CalculateRSI()
 {
    double rsiArr[];
-   if(CopyBuffer(iRSI(_Symbol, PERIOD_CURRENT, period), 0, 1, 1, rsiArr) < 1) return 50.0;
+   if(CopyBuffer(g_rsiHandle, 0, 1, 1, rsiArr) < 1) return 50.0;
    return rsiArr[0];
 }
 
 //+------------------------------------------------------------------+
 //| GetBollingerBands - closed bar only [1]                          |
 //+------------------------------------------------------------------+
-bool GetBB(double &upper, double &middle, double &lower, int period, double dev)
+bool GetBB(double &upper, double &middle, double &lower)
 {
-   upper   = iBoll(_Symbol, PERIOD_CURRENT, period, 0, MODE_MAIN, 1);
-   middle  = iBoll(_Symbol, PERIOD_CURRENT, period, dev, MODE_MAIN, 1);
-   lower   = iBoll(_Symbol, PERIOD_CURRENT, period, dev, MODE_LOWER, 1);
-   return (upper != 0 && lower != 0);
+   double upperArr[], middleArr[], lowerArr[];
+   if(CopyBuffer(g_bbHandle, 1, 1, 1, upperArr) < 1) return false;
+   if(CopyBuffer(g_bbHandle, 0, 1, 1, middleArr) < 1) return false;
+   if(CopyBuffer(g_bbHandle, 2, 1, 1, lowerArr) < 1) return false;
+   upper   = upperArr[0];
+   middle  = middleArr[0];
+   lower   = lowerArr[0];
+   return (upper != 0.0 && lower != 0.0);
 }
 
 //+------------------------------------------------------------------+
-//| CalculateLotSize                                                  |
+//| CalculateLotSize                                                 |
 //+------------------------------------------------------------------+
 double CalculateLotSize(double slDist)
 {
@@ -106,13 +112,13 @@ bool OpenTrade(ENUM_ORDER_TYPE type, double sl, double tp, double lots, RegimeEn
 
    request.action       = TRADE_ACTION_DEAL;
    request.symbol       = _Symbol;
-   request.volume      = lots;
-   request.type        = type;
-   request.price       = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   request.sl          = sl;
-   request.tp          = tp;
-   request.deviation   = 10;
-   request.comment     = "ClawRev_v1";
+   request.volume       = lots;
+   request.type         = type;
+   request.price        = (type == ORDER_TYPE_BUY) ? SymbolInfoDouble(_Symbol, SYMBOL_ASK) : SymbolInfoDouble(_Symbol, SYMBOL_BID);
+   request.sl           = sl;
+   request.tp           = tp;
+   request.deviation     = 10;
+   request.comment      = "ClawRev_v1";
 
    bool sent = OrderSend(request, result);
    if(sent && result.retcode == TRADE_RETCODE_DONE)
@@ -156,39 +162,42 @@ void LogTrade(string direction, double entry, double sl, double tp, double lots,
 //+------------------------------------------------------------------+
 void PrintDashboard()
 {
-   double rsi   = CalculateRSI(rsi_period);
+   double rsi = CalculateRSI();
    double upper, middle, lower;
-   GetBB(upper, middle, lower, bb_period, bb_deviation);
-   double atr   = iATR(_Symbol, PERIOD_CURRENT, atr_period);
-   RegimeEnum regime = GetRegime(atr_period);
+   GetBB(upper, middle, lower);
+
+   double atrArr[];
+   CopyBuffer(g_atrHandle, 0, 0, 1, atrArr);
+   double atr = (ArraySize(atrArr) > 0) ? atrArr[0] : 0;
+
+   RegimeEnum regime = GetRegime();
 
    string regimeStr = (regime == REGIME_HIGH) ? "HIGH" : (regime == REGIME_MID) ? "MID" : "LOW";
    string signal = "NEUTRAL";
 
    // Mean-reversion signals
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   bool bbUpperTouch = (price >= upper * 0.999);
-   bool bbLowerTouch = (price <= lower * 1.001);
+   bool bbUpperTouch = (price >= upper * 0.9999);
+   bool bbLowerTouch = (price <= lower * 1.0001);
    bool rsiOB = (rsi > 70);
    bool rsiOS = (rsi < 30);
 
    if(rsiOB && bbUpperTouch) signal = "SELL (overbought + BB upper)";
    else if(rsiOS && bbLowerTouch) signal = "BUY (oversold + BB lower)";
 
-   // Regime-based SL/TP multipliers
    double slMult = GetSLMultiplier(regime);
    double tpMult = GetTPMultiplier(regime);
 
    Print("=== ClawRev Dashboard ===");
-   Print("Symbol: ", _Symbol, " | Timeframe: ", EnumToString(PERIOD_CURRENT));
-   Print("RSI(", rsi_period, "): ", rsi, (rsiOB ? " [OVERBOUGHT]" : (rsiOS ? " [OVERSOLD]" : "")));
-   Print("BB(", bb_period, ", ", bb_deviation, ") | Upper: ", upper, " | Middle: ", middle, " | Lower: ", lower);
+   Print("Symbol: ", _Symbol);
+   Print("RSI: ", rsi, (rsiOB ? " [OVERBOUGHT]" : (rsiOS ? " [OVERSOLD]" : "")));
+   Print("BB Upper: ", upper, " | Middle: ", middle, " | Lower: ", lower);
    Print("Price: ", price, " | BB Upper Touch: ", bbUpperTouch, " | BB Lower Touch: ", bbLowerTouch);
-   Print("ATR(", atr_period, "): ", atr);
+   Print("ATR: ", atr);
    Print("Regime: ", regimeStr, " | SL Mult: ", slMult, " | TP Mult: ", tpMult);
    Print("Signal: ", signal);
    Print("Equity: ", AccountInfoDouble(ACCOUNT_EQUITY), " | Balance: ", AccountInfoDouble(ACCOUNT_BALANCE));
-   Print("============================");
+   Print("=========================");
 }
 
 //+------------------------------------------------------------------+
@@ -196,7 +205,6 @@ void PrintDashboard()
 //+------------------------------------------------------------------+
 bool CheckGuardrails()
 {
-   // No trades during high impact news (simple time-based guard)
    datetime now = TimeCurrent();
    MqlDateTime dt;
    TimeToStruct(now, dt);
@@ -210,20 +218,6 @@ bool CheckGuardrails()
    if(balance > 0 && (balance - equity) / balance > 0.20) return false;
 
    return true;
-}
-
-//+------------------------------------------------------------------+
-//| Check for new bar                                                |
-//+------------------------------------------------------------------+
-bool IsNewBar()
-{
-   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   if(currentBarTime != lastBarTime)
-   {
-      lastBarTime = currentBarTime;
-      return true;
-   }
-   return false;
 }
 
 //+------------------------------------------------------------------+
@@ -244,51 +238,54 @@ int CountPositions()
 //+------------------------------------------------------------------+
 void OnTick()
 {
-   if(!IsNewBar()) return;
+   datetime currentBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
+   if(currentBarTime == g_lastBarTime) return;
+   g_lastBarTime = currentBarTime;
+
    if(!CheckGuardrails()) return;
 
-   // Dashboard output every bar
    PrintDashboard();
 
-   // Only one position at a time
    if(CountPositions() > 0) return;
 
-   double rsi   = CalculateRSI(rsi_period);
+   double rsi = CalculateRSI();
    double upper, middle, lower;
-   GetBB(upper, middle, lower, bb_period, bb_deviation);
-   double atr   = iATR(_Symbol, PERIOD_CURRENT, atr_period);
-   RegimeEnum regime = GetRegime(atr_period);
+   GetBB(upper, middle, lower);
+
+   double atrArr[];
+   CopyBuffer(g_atrHandle, 0, 0, 1, atrArr);
+   double atr = (ArraySize(atrArr) > 0) ? atrArr[0] : 0;
+
+   RegimeEnum regime = GetRegime();
 
    double price = SymbolInfoDouble(_Symbol, SYMBOL_BID);
-   double ask   = SymbolInfoDouble(_Symbol, SYMBOL_ASK);
-   double spread = SymbolInfoDouble(_Symbol, SYMBOL_SPREAD);
 
    // Mean reversion entry logic
    bool rsiOB = (rsi > 70);
    bool rsiOS = (rsi < 30);
-   bool bbUpperTouch = (price >= upper * 0.999);
-   bool bbLowerTouch = (price <= lower * 1.001);
+   bool bbUpperTouch = (price >= upper * 0.9999);
+   bool bbLowerTouch = (price <= lower * 1.0001);
 
    double slMult = GetSLMultiplier(regime);
    double tpMult = GetTPMultiplier(regime);
 
-   double slDist = atr * atr_sl_mult * slMult;
-   double tpDist = atr * atr_tp_mult * tpMult;
+   double slDist = atr * atr_sl_mult;
+   double tpDist = atr * atr_tp_mult;
 
-   // SELL: RSI overbought + price at BB upper
+   // SELL: RSI overbought + price at/near BB upper
    if(rsiOB && bbUpperTouch)
    {
-      double sl = price + slDist;
-      double tp = price - tpDist;
-      double lots = CalculateLotSize(slDist);
+      double sl = price + slDist * slMult;
+      double tp = price - tpDist * tpMult;
+      double lots = CalculateLotSize(slDist * slMult);
       OpenTrade(ORDER_TYPE_SELL, sl, tp, lots, regime);
    }
-   // BUY: RSI oversold + price at BB lower
+   // BUY: RSI oversold + price at/near BB lower
    else if(rsiOS && bbLowerTouch)
    {
-      double sl = price - slDist;
-      double tp = price + tpDist;
-      double lots = CalculateLotSize(slDist);
+      double sl = price - slDist * slMult;
+      double tp = price + tpDist * tpMult;
+      double lots = CalculateLotSize(slDist * slMult);
       OpenTrade(ORDER_TYPE_BUY, sl, tp, lots, regime);
    }
 }
@@ -298,9 +295,17 @@ void OnTick()
 //+------------------------------------------------------------------+
 int OnInit()
 {
-   lastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
-   lastEquity = AccountInfoDouble(ACCOUNT_EQUITY);
-   lastBalance = AccountInfoDouble(ACCOUNT_BALANCE);
+   g_rsiHandle = iRSI(_Symbol, PERIOD_CURRENT, rsi_period, PRICE_CLOSE);
+   g_bbHandle  = iBands(_Symbol, PERIOD_CURRENT, bb_period, 0, bb_deviation, PRICE_CLOSE);
+   g_atrHandle = iATR(_Symbol, PERIOD_CURRENT, atr_period);
+
+   if(g_rsiHandle == INVALID_HANDLE || g_bbHandle == INVALID_HANDLE || g_atrHandle == INVALID_HANDLE)
+   {
+      Print("ClawRev_v1 ERROR: Failed to create indicator handles!");
+      return INIT_FAILED;
+   }
+
+   g_lastBarTime = iTime(_Symbol, PERIOD_CURRENT, 0);
    Print("ClawRev_v1 initialized - Mean Reversion EA");
    Print("Parameters: bb_period=", bb_period, ", bb_deviation=", bb_deviation,
          ", rsi_period=", rsi_period, ", atr_period=", atr_period,
@@ -310,10 +315,13 @@ int OnInit()
 }
 
 //+------------------------------------------------------------------+
-//| Expert deinitialization                                         |
+//| Expert deinitialization                                          |
 //+------------------------------------------------------------------+
 void OnDeinit(const int reason)
 {
+   if(g_rsiHandle != INVALID_HANDLE) IndicatorRelease(g_rsiHandle);
+   if(g_bbHandle != INVALID_HANDLE)  IndicatorRelease(g_bbHandle);
+   if(g_atrHandle != INVALID_HANDLE) IndicatorRelease(g_atrHandle);
    Print("ClawRev_v1 deinitialized - Reason: ", reason);
 }
 //+------------------------------------------------------------------+
